@@ -22,7 +22,12 @@ func TestTranslator_Message(t *testing.T) {
 
 func TestTranslator_LoadFromFile(t *testing.T) {
 	translator := NewTranslator("en")
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp(".", "translations_test_")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
 	path := filepath.Join(dir, "fr.json")
 	if err := os.WriteFile(path, []byte(`{"invalid_token":"jeton expiré"}`), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
