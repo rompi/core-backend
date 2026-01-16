@@ -2,16 +2,40 @@
 
 ## Overview
 
-This document outlines the comprehensive plan for creating a production-ready HTTP server package (`pkg/httpserver`) that follows the established patterns in this codebase. The package will be designed as a plug-and-play solution that allows upstream services to easily integrate their business logic.
+This document outlines the comprehensive plan for creating a production-ready HTTP server package (`pkg/httpserver`) built on top of the **Echo framework**. The package will provide a plug-and-play solution that wraps Echo with sensible defaults, custom configurations, and seamless integration with existing codebase packages (auth, httpclient).
+
+## Why Echo Framework?
+
+Echo is a high-performance, extensible, minimalist Go web framework that provides:
+- **High Performance**: One of the fastest Go web frameworks
+- **Extensible Middleware**: Rich middleware ecosystem
+- **Optimized Router**: Radix tree based routing with zero dynamic memory allocation
+- **Data Binding**: Automatic binding of request payload (JSON, XML, form)
+- **Data Validation**: Built-in validation with go-playground/validator
+- **Error Handling**: Centralized HTTP error handling
+- **Template Rendering**: Support for any template engine
+- **Scalability**: Battle-tested in production environments
 
 ## Design Goals
 
 1. **Plug-and-Play**: Easy to set up with sensible defaults, minimal configuration required
-2. **Composable**: Middleware-based architecture for extensibility
-3. **Production-Ready**: Includes all essential features for production deployments
-4. **Framework Agnostic**: No external dependencies, uses only Go standard library
+2. **Echo-Powered**: Leverage Echo's performance and feature set
+3. **Production-Ready**: Pre-configured with essential production features
+4. **Wrapper Pattern**: Thin abstraction over Echo for consistency and ease of use
 5. **Testable**: Interface-driven design with testing utilities
 6. **Consistent**: Follows existing codebase patterns (auth, httpclient packages)
+
+---
+
+## Dependencies
+
+```go
+// go.mod additions
+require (
+    github.com/labstack/echo/v4 v4.11.4
+    github.com/labstack/echo/v4/middleware
+)
+```
 
 ---
 
@@ -19,45 +43,31 @@ This document outlines the comprehensive plan for creating a production-ready HT
 
 ```
 pkg/httpserver/
-├── server.go           # Core Server type and lifecycle management
+├── server.go           # Core Server wrapper around Echo
 ├── config.go           # Configuration with environment variable support
-├── router.go           # Router with path parameters and method routing
-├── context.go          # Request context utilities and value injection
-├── middleware.go       # Middleware type definition and chaining
-├── handler.go          # Handler types and adapter functions
-├── request.go          # Request parsing and validation helpers
-├── response.go         # Response writing utilities (JSON, error, etc.)
-├── errors.go           # Structured error types and error responses
-├── logger.go           # Logger interface (consistent with httpclient)
-├── health.go           # Health check endpoint and readiness probes
-├── graceful.go         # Graceful shutdown implementation
-├── tls.go              # TLS configuration and certificate handling
-├── recovery.go         # Panic recovery middleware
-├── timeout.go          # Request timeout middleware
-├── cors.go             # CORS middleware
-├── requestid.go        # Request ID generation and propagation
-├── compress.go         # Response compression (gzip, deflate)
-├── ratelimit.go        # Rate limiting middleware (token bucket)
-├── metrics.go          # Metrics collection interface
-├── validation.go       # Request body and query validation
-├── binding.go          # Request body binding (JSON, form, etc.)
-├── static.go           # Static file serving
-├── websocket.go        # WebSocket upgrade support (optional)
+├── context.go          # Extended context utilities
+├── middleware.go       # Custom middleware and middleware adapters
+├── handler.go          # Handler type adapters and utilities
+├── errors.go           # Structured error types and error handlers
+├── logger.go           # Logger adapter for Echo (bridges to our Logger interface)
+├── health.go           # Health check handlers
+├── binder.go           # Custom binder extensions
+├── validator.go        # Custom validator setup
+├── response.go         # Response helper utilities
+├── auth_adapter.go     # Adapter for pkg/auth middleware integration
 ├── options.go          # Functional options pattern
 ├── doc.go              # Package documentation
 ├── server_test.go      # Server tests
-├── router_test.go      # Router tests
 ├── middleware_test.go  # Middleware tests
 ├── *_test.go           # Other test files
 ├── testutil/           # Testing utilities
-│   ├── mock_handler.go
-│   ├── test_server.go
-│   └── assertions.go
+│   ├── test_server.go  # Test server helper
+│   └── assertions.go   # Test assertions
 ├── examples/           # Example implementations
 │   ├── basic/          # Minimal setup example
 │   ├── rest-api/       # Full REST API example
-│   ├── middleware/     # Custom middleware example
-│   └── graceful/       # Graceful shutdown example
+│   ├── with-auth/      # Integration with auth package
+│   └── custom-middleware/ # Custom middleware example
 └── README.md           # Package documentation
 ```
 
@@ -67,41 +77,109 @@ pkg/httpserver/
 
 ### 1. Server (`server.go`)
 
-The main Server struct that wraps `http.Server` with additional functionality.
+The main Server struct that wraps Echo with additional lifecycle management.
 
 ```go
-// Server represents an HTTP server with production-ready features
+package httpserver
+
+import (
+    "context"
+    "fmt"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
+
+    "github.com/labstack/echo/v4"
+    "github.com/labstack/echo/v4/middleware"
+)
+
+// Server wraps Echo with production-ready defaults
 type Server struct {
-    server      *http.Server
-    router      *Router
-    middlewares []Middleware
-    config      *Config
-    logger      Logger
-
-    // Lifecycle
-    running     atomic.Bool
-    shutdownCh  chan struct{}
-
-    // Health
-    healthChecker HealthChecker
+    echo            *echo.Echo
+    config          *Config
+    logger          Logger
+    healthChecker   *HealthChecker
+    shutdownHooks   []ShutdownHook
 }
 
-// Key Methods:
-// - NewServer(opts ...Option) *Server
-// - Start() error
-// - StartTLS(certFile, keyFile string) error
-// - Shutdown(ctx context.Context) error
-// - ListenAndServe() error
-// - Router() *Router
-// - Use(middlewares ...Middleware)
+// ShutdownHook is called during graceful shutdown
+type ShutdownHook func(ctx context.Context) error
+
+// NewServer creates a new HTTP server with the given options
+func NewServer(opts ...Option) *Server
+
+// Echo returns the underlying Echo instance for advanced configuration
+func (s *Server) Echo() *echo.Echo
+
+// --- Route Registration (delegated to Echo) ---
+
+// GET registers a GET route
+func (s *Server) GET(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+
+// POST registers a POST route
+func (s *Server) POST(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+
+// PUT registers a PUT route
+func (s *Server) PUT(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+
+// PATCH registers a PATCH route
+func (s *Server) PATCH(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+
+// DELETE registers a DELETE route
+func (s *Server) DELETE(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+
+// Group creates a route group with optional middleware
+func (s *Server) Group(prefix string, m ...echo.MiddlewareFunc) *echo.Group
+
+// Use adds middleware to the server
+func (s *Server) Use(middleware ...echo.MiddlewareFunc)
+
+// Static serves static files from a directory
+func (s *Server) Static(prefix, root string)
+
+// File serves a single file
+func (s *Server) File(path, file string)
+
+// --- Lifecycle ---
+
+// Start starts the HTTP server
+func (s *Server) Start() error
+
+// StartTLS starts the HTTPS server
+func (s *Server) StartTLS(certFile, keyFile string) error
+
+// Shutdown gracefully shuts down the server
+func (s *Server) Shutdown(ctx context.Context) error
+
+// ListenAndServe starts the server and blocks until shutdown
+// Handles OS signals for graceful shutdown automatically
+func (s *Server) ListenAndServe() error
+
+// OnShutdown registers a hook to be called during shutdown
+func (s *Server) OnShutdown(hook ShutdownHook)
+
+// --- Health ---
+
+// RegisterHealthCheck registers the health check endpoint
+func (s *Server) RegisterHealthCheck()
+
+// AddHealthChecker adds a health checker
+func (s *Server) AddHealthChecker(checker HealthCheckerFunc)
 ```
 
-**Features:**
-- Functional options pattern for configuration
-- Automatic graceful shutdown on OS signals
-- Health check endpoint registration
-- Middleware chain management
-- TLS support out of the box
+**Default Middleware Stack:**
+When `NewServer()` is called, the following middlewares are automatically configured:
+1. Recovery (panic recovery)
+2. Request ID
+3. Logger (if logger provided)
+4. Secure headers
+5. CORS (if enabled in config)
+6. Rate limiting (if enabled in config)
+7. Gzip compression (if enabled in config)
+8. Body limit
+9. Timeout
 
 ---
 
@@ -112,57 +190,62 @@ Environment-driven configuration with validation.
 ```go
 type Config struct {
     // Server
-    Host            string        // Default: ""
-    Port            int           // Default: 8080
-    ReadTimeout     time.Duration // Default: 30s
-    WriteTimeout    time.Duration // Default: 30s
-    IdleTimeout     time.Duration // Default: 120s
-    MaxHeaderBytes  int           // Default: 1MB
-    ShutdownTimeout time.Duration // Default: 30s
+    Host            string        `env:"HTTP_HOST" envDefault:""`
+    Port            int           `env:"HTTP_PORT" envDefault:"8080"`
+    ReadTimeout     time.Duration `env:"HTTP_READ_TIMEOUT" envDefault:"30s"`
+    WriteTimeout    time.Duration `env:"HTTP_WRITE_TIMEOUT" envDefault:"30s"`
+    ShutdownTimeout time.Duration `env:"HTTP_SHUTDOWN_TIMEOUT" envDefault:"30s"`
 
     // TLS
-    TLSEnabled      bool
-    TLSCertFile     string
-    TLSKeyFile      string
-    TLSMinVersion   uint16        // Default: TLS 1.2
+    TLSEnabled      bool   `env:"HTTP_TLS_ENABLED" envDefault:"false"`
+    TLSCertFile     string `env:"HTTP_TLS_CERT_FILE"`
+    TLSKeyFile      string `env:"HTTP_TLS_KEY_FILE"`
 
     // Request Limits
-    MaxBodySize     int64         // Default: 10MB
+    BodyLimit       string `env:"HTTP_BODY_LIMIT" envDefault:"10M"`
 
     // Features
-    EnableHealthCheck   bool      // Default: true
-    HealthCheckPath     string    // Default: /health
-    EnableReadinessCheck bool     // Default: true
-    ReadinessCheckPath  string    // Default: /ready
-    EnableMetrics       bool      // Default: false
-    MetricsPath         string    // Default: /metrics
+    Debug           bool   `env:"HTTP_DEBUG" envDefault:"false"`
+
+    // Health Check
+    HealthCheckEnabled bool   `env:"HTTP_HEALTH_ENABLED" envDefault:"true"`
+    HealthCheckPath    string `env:"HTTP_HEALTH_PATH" envDefault:"/health"`
+    LivenessPath       string `env:"HTTP_LIVENESS_PATH" envDefault:"/health/live"`
+    ReadinessPath      string `env:"HTTP_READINESS_PATH" envDefault:"/health/ready"`
 
     // CORS
-    CORSEnabled         bool
-    CORSAllowedOrigins  []string
-    CORSAllowedMethods  []string
-    CORSAllowedHeaders  []string
-    CORSExposedHeaders  []string
-    CORSMaxAge          int
-    CORSAllowCredentials bool
+    CORSEnabled          bool     `env:"HTTP_CORS_ENABLED" envDefault:"false"`
+    CORSAllowOrigins     []string `env:"HTTP_CORS_ALLOW_ORIGINS" envDefault:"*"`
+    CORSAllowMethods     []string `env:"HTTP_CORS_ALLOW_METHODS" envDefault:"GET,POST,PUT,PATCH,DELETE,OPTIONS"`
+    CORSAllowHeaders     []string `env:"HTTP_CORS_ALLOW_HEADERS" envDefault:"Origin,Content-Type,Accept,Authorization,X-Request-ID"`
+    CORSExposeHeaders    []string `env:"HTTP_CORS_EXPOSE_HEADERS"`
+    CORSAllowCredentials bool     `env:"HTTP_CORS_ALLOW_CREDENTIALS" envDefault:"false"`
+    CORSMaxAge           int      `env:"HTTP_CORS_MAX_AGE" envDefault:"86400"`
 
     // Rate Limiting
-    RateLimitEnabled    bool
-    RateLimitRequests   int       // Requests per window
-    RateLimitWindow     time.Duration
+    RateLimitEnabled  bool          `env:"HTTP_RATE_LIMIT_ENABLED" envDefault:"false"`
+    RateLimitRate     float64       `env:"HTTP_RATE_LIMIT_RATE" envDefault:"10"`
+    RateLimitBurst    int           `env:"HTTP_RATE_LIMIT_BURST" envDefault:"30"`
+    RateLimitExpiry   time.Duration `env:"HTTP_RATE_LIMIT_EXPIRY" envDefault:"3m"`
 
     // Compression
-    CompressionEnabled  bool      // Default: true
-    CompressionLevel    int       // Default: gzip.DefaultCompression
-    CompressionMinSize  int       // Default: 1024 bytes
+    GzipEnabled bool `env:"HTTP_GZIP_ENABLED" envDefault:"true"`
+    GzipLevel   int  `env:"HTTP_GZIP_LEVEL" envDefault:"5"`
 
     // Request ID
-    RequestIDEnabled    bool      // Default: true
-    RequestIDHeader     string    // Default: X-Request-ID
+    RequestIDEnabled bool   `env:"HTTP_REQUEST_ID_ENABLED" envDefault:"true"`
+    RequestIDHeader  string `env:"HTTP_REQUEST_ID_HEADER" envDefault:"X-Request-ID"`
+
+    // Timeout
+    TimeoutEnabled bool          `env:"HTTP_TIMEOUT_ENABLED" envDefault:"true"`
+    Timeout        time.Duration `env:"HTTP_TIMEOUT" envDefault:"30s"`
+
+    // Secure Headers
+    SecureEnabled bool `env:"HTTP_SECURE_ENABLED" envDefault:"true"`
 
     // Logging
-    LogRequests         bool      // Default: true
-    LogResponseBody     bool      // Default: false
+    LogRequests      bool `env:"HTTP_LOG_REQUESTS" envDefault:"true"`
+    LogSkipPaths     []string `env:"HTTP_LOG_SKIP_PATHS"`
 }
 
 // Functions:
@@ -170,251 +253,141 @@ type Config struct {
 // - LoadConfigFromEnv() (*Config, error)
 // - (c *Config) Validate() error
 // - DefaultConfig() *Config
-```
-
-**Environment Variables:**
-```
-HTTP_HOST, HTTP_PORT, HTTP_READ_TIMEOUT, HTTP_WRITE_TIMEOUT,
-HTTP_IDLE_TIMEOUT, HTTP_MAX_HEADER_BYTES, HTTP_SHUTDOWN_TIMEOUT,
-HTTP_TLS_ENABLED, HTTP_TLS_CERT_FILE, HTTP_TLS_KEY_FILE,
-HTTP_MAX_BODY_SIZE, HTTP_CORS_ENABLED, HTTP_CORS_ALLOWED_ORIGINS,
-HTTP_RATE_LIMIT_ENABLED, HTTP_RATE_LIMIT_REQUESTS, etc.
+// - (c *Config) Address() string // Returns "host:port"
 ```
 
 ---
 
-### 3. Router (`router.go`)
+### 3. Context Utilities (`context.go`)
 
-A lightweight router with path parameter support.
-
-```go
-type Router struct {
-    routes      map[string]*routeNode // method -> trie
-    middleware  []Middleware
-    notFound    HandlerFunc
-    methodNotAllowed HandlerFunc
-}
-
-type Route struct {
-    Method      string
-    Pattern     string
-    Handler     HandlerFunc
-    Middlewares []Middleware
-    Name        string
-}
-
-// Key Methods:
-// - NewRouter() *Router
-// - Handle(method, pattern string, handler HandlerFunc, middlewares ...Middleware)
-// - GET(pattern string, handler HandlerFunc, middlewares ...Middleware)
-// - POST(pattern string, handler HandlerFunc, middlewares ...Middleware)
-// - PUT(pattern string, handler HandlerFunc, middlewares ...Middleware)
-// - PATCH(pattern string, handler HandlerFunc, middlewares ...Middleware)
-// - DELETE(pattern string, handler HandlerFunc, middlewares ...Middleware)
-// - OPTIONS(pattern string, handler HandlerFunc, middlewares ...Middleware)
-// - HEAD(pattern string, handler HandlerFunc, middlewares ...Middleware)
-// - Group(prefix string, middlewares ...Middleware) *RouteGroup
-// - Use(middlewares ...Middleware)
-// - ServeHTTP(w http.ResponseWriter, r *http.Request)
-// - NotFound(handler HandlerFunc)
-// - MethodNotAllowed(handler HandlerFunc)
-```
-
-**Path Parameter Patterns:**
-```go
-router.GET("/users/:id", handler)           // Named parameter
-router.GET("/files/*filepath", handler)     // Wildcard/catch-all
-router.GET("/users/:id/posts/:postId", handler) // Multiple parameters
-```
-
----
-
-### 4. Context Utilities (`context.go`)
-
-Request context management and value injection.
+Extended context utilities that work with Echo's context.
 
 ```go
+// Context keys for custom values
 type contextKey string
 
 const (
-    RequestIDKey    contextKey = "request-id"
-    RouteParamsKey  contextKey = "route-params"
-    StartTimeKey    contextKey = "start-time"
-    LoggerKey       contextKey = "logger"
+    LoggerContextKey contextKey = "httpserver-logger"
+    UserContextKey   contextKey = "httpserver-user"
 )
 
-// RouteParams holds path parameters
-type RouteParams map[string]string
+// GetRequestID returns the request ID from Echo context
+func GetRequestID(c echo.Context) string
 
-// Functions:
-// - RequestID(ctx context.Context) string
-// - SetRequestID(ctx context.Context, id string) context.Context
-// - RouteParam(ctx context.Context, name string) string
-// - RouteParamsFromContext(ctx context.Context) RouteParams
-// - SetRouteParams(ctx context.Context, params RouteParams) context.Context
-// - RequestStartTime(ctx context.Context) time.Time
-// - WithLogger(ctx context.Context, logger Logger) context.Context
-// - LoggerFromContext(ctx context.Context) Logger
+// GetLogger returns the logger from context
+func GetLogger(c echo.Context) Logger
+
+// SetLogger sets the logger in context
+func SetLogger(c echo.Context, logger Logger)
+
+// GetClientIP returns the real client IP (handles proxies)
+func GetClientIP(c echo.Context) string
+
+// GetUser returns the authenticated user from context (integration with auth package)
+func GetUser(c echo.Context) interface{}
+
+// SetUser sets the authenticated user in context
+func SetUser(c echo.Context, user interface{})
+
+// MustBind binds and validates request, returns HTTPError on failure
+func MustBind(c echo.Context, v interface{}) error
+
+// BindAndValidate binds request body and validates
+func BindAndValidate(c echo.Context, v interface{}) error
 ```
 
 ---
 
-### 5. Middleware (`middleware.go`)
+### 4. Middleware (`middleware.go`)
 
-Middleware type definition and chain utilities.
-
-```go
-// Middleware wraps an HTTP handler
-type Middleware func(HandlerFunc) HandlerFunc
-
-// MiddlewareFunc is the standard http.Handler middleware
-type MiddlewareFunc func(http.Handler) http.Handler
-
-// Chain combines multiple middlewares
-func Chain(middlewares ...Middleware) Middleware
-
-// Adapt converts standard http.Handler middleware to our Middleware type
-func Adapt(m MiddlewareFunc) Middleware
-
-// AdaptHandler converts http.Handler to HandlerFunc
-func AdaptHandler(h http.Handler) HandlerFunc
-
-// WrapHandler wraps HandlerFunc back to http.Handler
-func WrapHandler(h HandlerFunc) http.Handler
-```
-
----
-
-### 6. Handler Types (`handler.go`)
-
-Custom handler types with error return support.
+Custom middleware and adapters.
 
 ```go
-// HandlerFunc is our custom handler that can return errors
-type HandlerFunc func(w http.ResponseWriter, r *http.Request) error
+// MiddlewareFunc is an alias for echo.MiddlewareFunc
+type MiddlewareFunc = echo.MiddlewareFunc
 
-// Handler interface for struct-based handlers
-type Handler interface {
-    ServeHTTP(w http.ResponseWriter, r *http.Request) error
+// HandlerFunc is an alias for echo.HandlerFunc
+type HandlerFunc = echo.HandlerFunc
+
+// --- Middleware Adapters ---
+
+// AdaptStdMiddleware converts standard http middleware to Echo middleware
+func AdaptStdMiddleware(m func(http.Handler) http.Handler) echo.MiddlewareFunc
+
+// --- Custom Middlewares ---
+
+// LoggerMiddleware creates a logging middleware using our Logger interface
+func LoggerMiddleware(logger Logger) echo.MiddlewareFunc
+
+// LoggerMiddlewareWithConfig creates a configurable logging middleware
+func LoggerMiddlewareWithConfig(config LoggerMiddlewareConfig) echo.MiddlewareFunc
+
+type LoggerMiddlewareConfig struct {
+    Logger      Logger
+    SkipPaths   []string
+    SkipFunc    func(c echo.Context) bool
 }
 
-// Adapters:
-// - ToStdHandler(h HandlerFunc) http.HandlerFunc
-// - FromStdHandler(h http.HandlerFunc) HandlerFunc
-// - FromHandler(h Handler) HandlerFunc
+// MetricsMiddleware creates a metrics collection middleware
+func MetricsMiddleware(metrics Metrics) echo.MiddlewareFunc
+
+// RequestContextMiddleware adds request-scoped values to context
+func RequestContextMiddleware(logger Logger) echo.MiddlewareFunc
 ```
 
-**Benefits of error-returning handlers:**
+**Using Echo's Built-in Middlewares:**
 ```go
-// Instead of this:
-func handler(w http.ResponseWriter, r *http.Request) {
-    data, err := service.GetData()
-    if err != nil {
-        http.Error(w, err.Error(), 500)
-        return
-    }
-    json.NewEncoder(w).Encode(data)
-}
+import "github.com/labstack/echo/v4/middleware"
 
-// You can do this:
-func handler(w http.ResponseWriter, r *http.Request) error {
-    data, err := service.GetData()
-    if err != nil {
-        return err // Handled by error middleware
-    }
-    return JSON(w, http.StatusOK, data)
-}
+// These are automatically configured but can be customized:
+// - middleware.Recover()
+// - middleware.RequestID()
+// - middleware.Logger()
+// - middleware.CORSWithConfig(...)
+// - middleware.RateLimiter(...)
+// - middleware.GzipWithConfig(...)
+// - middleware.BodyLimit(...)
+// - middleware.TimeoutWithConfig(...)
+// - middleware.Secure()
 ```
 
 ---
 
-### 7. Request Helpers (`request.go`)
+### 5. Handler Utilities (`handler.go`)
 
-Request parsing and extraction utilities.
+Handler adapters and utilities.
 
 ```go
-// Body binding
-func Bind(r *http.Request, v interface{}) error
-func BindJSON(r *http.Request, v interface{}) error
-func BindForm(r *http.Request, v interface{}) error
-func BindQuery(r *http.Request, v interface{}) error
+// Handler is an alias for echo.HandlerFunc
+type Handler = echo.HandlerFunc
 
-// Parameter extraction
-func PathParam(r *http.Request, name string) string
-func QueryParam(r *http.Request, name string) string
-func QueryParamDefault(r *http.Request, name, defaultValue string) string
-func QueryParams(r *http.Request, name string) []string
-func QueryInt(r *http.Request, name string, defaultValue int) int
-func QueryBool(r *http.Request, name string, defaultValue bool) bool
+// ErrorHandler is the custom error handler type
+type ErrorHandler func(err error, c echo.Context)
 
-// Header helpers
-func Header(r *http.Request, name string) string
-func ContentType(r *http.Request) string
-func Accept(r *http.Request) string
-func BearerToken(r *http.Request) string
+// WrapHandler wraps a standard http.Handler to Echo handler
+func WrapHandler(h http.Handler) echo.HandlerFunc
 
-// Request info
-func ClientIP(r *http.Request) string
-func IsAJAX(r *http.Request) bool
-func IsWebSocket(r *http.Request) bool
-func Scheme(r *http.Request) string
-func FullURL(r *http.Request) string
+// WrapHandlerFunc wraps a standard http.HandlerFunc to Echo handler
+func WrapHandlerFunc(h http.HandlerFunc) echo.HandlerFunc
+
+// ToStdHandler converts Echo handler to standard http.Handler
+func ToStdHandler(h echo.HandlerFunc, e *echo.Echo) http.Handler
 ```
 
 ---
 
-### 8. Response Helpers (`response.go`)
+### 6. Error Handling (`errors.go`)
 
-Response writing utilities.
-
-```go
-// ResponseWriter wraps http.ResponseWriter with additional features
-type ResponseWriter struct {
-    http.ResponseWriter
-    status      int
-    size        int64
-    written     bool
-}
-
-// Constructor
-func NewResponseWriter(w http.ResponseWriter) *ResponseWriter
-
-// Methods
-func (w *ResponseWriter) Status() int
-func (w *ResponseWriter) Size() int64
-func (w *ResponseWriter) Written() bool
-func (w *ResponseWriter) Flush()
-func (w *ResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error)
-
-// Response helpers (standalone functions)
-func JSON(w http.ResponseWriter, status int, data interface{}) error
-func JSONPretty(w http.ResponseWriter, status int, data interface{}) error
-func XML(w http.ResponseWriter, status int, data interface{}) error
-func HTML(w http.ResponseWriter, status int, html string) error
-func Text(w http.ResponseWriter, status int, text string) error
-func Bytes(w http.ResponseWriter, status int, contentType string, data []byte) error
-func Stream(w http.ResponseWriter, status int, contentType string, reader io.Reader) error
-func File(w http.ResponseWriter, r *http.Request, filepath string) error
-func Attachment(w http.ResponseWriter, r *http.Request, filepath, filename string) error
-func Redirect(w http.ResponseWriter, r *http.Request, url string, status int) error
-func NoContent(w http.ResponseWriter) error
-func Created(w http.ResponseWriter, location string, data interface{}) error
-```
-
----
-
-### 9. Error Handling (`errors.go`)
-
-Structured error types and error response formatting.
+Structured error types and centralized error handling.
 
 ```go
-// HTTPError represents an HTTP error with status code
+// HTTPError represents an HTTP error response
 type HTTPError struct {
-    Code       int         `json:"code"`
-    Message    string      `json:"message"`
-    Details    interface{} `json:"details,omitempty"`
-    Internal   error       `json:"-"`
-    RequestID  string      `json:"request_id,omitempty"`
+    Code      int         `json:"code"`
+    Message   string      `json:"message"`
+    Details   interface{} `json:"details,omitempty"`
+    RequestID string      `json:"request_id,omitempty"`
+    Internal  error       `json:"-"`
 }
 
 func (e *HTTPError) Error() string
@@ -423,40 +396,50 @@ func (e *HTTPError) Unwrap() error
 // Error constructors
 func NewHTTPError(code int, message string) *HTTPError
 func NewHTTPErrorWithDetails(code int, message string, details interface{}) *HTTPError
+func WrapError(code int, message string, err error) *HTTPError
 
-// Common errors
+// Common errors (pre-defined for convenience)
 var (
-    ErrBadRequest          = NewHTTPError(400, "bad request")
-    ErrUnauthorized        = NewHTTPError(401, "unauthorized")
-    ErrForbidden           = NewHTTPError(403, "forbidden")
-    ErrNotFound            = NewHTTPError(404, "not found")
-    ErrMethodNotAllowed    = NewHTTPError(405, "method not allowed")
-    ErrConflict            = NewHTTPError(409, "conflict")
-    ErrUnprocessableEntity = NewHTTPError(422, "unprocessable entity")
-    ErrTooManyRequests     = NewHTTPError(429, "too many requests")
-    ErrInternalServer      = NewHTTPError(500, "internal server error")
-    ErrServiceUnavailable  = NewHTTPError(503, "service unavailable")
+    ErrBadRequest          = NewHTTPError(http.StatusBadRequest, "bad request")
+    ErrUnauthorized        = NewHTTPError(http.StatusUnauthorized, "unauthorized")
+    ErrForbidden           = NewHTTPError(http.StatusForbidden, "forbidden")
+    ErrNotFound            = NewHTTPError(http.StatusNotFound, "not found")
+    ErrMethodNotAllowed    = NewHTTPError(http.StatusMethodNotAllowed, "method not allowed")
+    ErrConflict            = NewHTTPError(http.StatusConflict, "conflict")
+    ErrUnprocessableEntity = NewHTTPError(http.StatusUnprocessableEntity, "unprocessable entity")
+    ErrTooManyRequests     = NewHTTPError(http.StatusTooManyRequests, "too many requests")
+    ErrInternalServer      = NewHTTPError(http.StatusInternalServerError, "internal server error")
+    ErrServiceUnavailable  = NewHTTPError(http.StatusServiceUnavailable, "service unavailable")
 )
 
-// Error response helper
-func Error(w http.ResponseWriter, err error) error
-func ErrorWithStatus(w http.ResponseWriter, status int, message string) error
+// DefaultErrorHandler is the default centralized error handler
+func DefaultErrorHandler(err error, c echo.Context)
 
-// ErrorHandler is the signature for custom error handlers
-type ErrorHandler func(w http.ResponseWriter, r *http.Request, err error)
+// CustomErrorHandler creates an error handler with custom options
+func CustomErrorHandler(logger Logger, debug bool) echo.HTTPErrorHandler
+```
 
-// DefaultErrorHandler is the default error handler
-func DefaultErrorHandler(w http.ResponseWriter, r *http.Request, err error)
+**Error Response Format:**
+```json
+{
+    "code": 400,
+    "message": "validation failed",
+    "details": {
+        "field": "email",
+        "error": "invalid email format"
+    },
+    "request_id": "abc-123-xyz"
+}
 ```
 
 ---
 
-### 10. Logger Interface (`logger.go`)
+### 7. Logger Adapter (`logger.go`)
 
-Pluggable logger interface (consistent with httpclient package).
+Logger interface and Echo adapter.
 
 ```go
-// Logger defines the logging interface
+// Logger defines the logging interface (consistent with httpclient package)
 type Logger interface {
     Debug(msg string, keysAndValues ...interface{})
     Info(msg string, keysAndValues ...interface{})
@@ -488,266 +471,280 @@ const (
 )
 
 func NewStdLogger(out io.Writer, level LogLevel) *StdLogger
+
+// EchoLoggerAdapter adapts our Logger interface to Echo's logger
+type EchoLoggerAdapter struct {
+    logger Logger
+}
+
+func NewEchoLoggerAdapter(logger Logger) *EchoLoggerAdapter
+
+// Implements echo.Logger interface
+func (l *EchoLoggerAdapter) Output() io.Writer
+func (l *EchoLoggerAdapter) SetOutput(w io.Writer)
+func (l *EchoLoggerAdapter) Prefix() string
+func (l *EchoLoggerAdapter) SetPrefix(p string)
+func (l *EchoLoggerAdapter) Level() log.Lvl
+func (l *EchoLoggerAdapter) SetLevel(v log.Lvl)
+func (l *EchoLoggerAdapter) SetHeader(h string)
+func (l *EchoLoggerAdapter) Print(i ...interface{})
+func (l *EchoLoggerAdapter) Printf(format string, args ...interface{})
+func (l *EchoLoggerAdapter) Printj(j log.JSON)
+func (l *EchoLoggerAdapter) Debug(i ...interface{})
+func (l *EchoLoggerAdapter) Debugf(format string, args ...interface{})
+func (l *EchoLoggerAdapter) Debugj(j log.JSON)
+func (l *EchoLoggerAdapter) Info(i ...interface{})
+func (l *EchoLoggerAdapter) Infof(format string, args ...interface{})
+func (l *EchoLoggerAdapter) Infoj(j log.JSON)
+func (l *EchoLoggerAdapter) Warn(i ...interface{})
+func (l *EchoLoggerAdapter) Warnf(format string, args ...interface{})
+func (l *EchoLoggerAdapter) Warnj(j log.JSON)
+func (l *EchoLoggerAdapter) Error(i ...interface{})
+func (l *EchoLoggerAdapter) Errorf(format string, args ...interface{})
+func (l *EchoLoggerAdapter) Errorj(j log.JSON)
+func (l *EchoLoggerAdapter) Fatal(i ...interface{})
+func (l *EchoLoggerAdapter) Fatalf(format string, args ...interface{})
+func (l *EchoLoggerAdapter) Fatalj(j log.JSON)
+func (l *EchoLoggerAdapter) Panic(i ...interface{})
+func (l *EchoLoggerAdapter) Panicf(format string, args ...interface{})
+func (l *EchoLoggerAdapter) Panicj(j log.JSON)
 ```
 
 ---
 
-### 11. Health Checks (`health.go`)
+### 8. Health Checks (`health.go`)
 
 Health and readiness check support.
 
 ```go
-// HealthChecker defines the health check interface
-type HealthChecker interface {
-    // Check returns nil if healthy, error otherwise
-    Check(ctx context.Context) error
-    // Name returns the name of the health check
-    Name() string
+// HealthCheckerFunc is a function that performs a health check
+type HealthCheckerFunc func(ctx context.Context) error
+
+// HealthChecker manages multiple health checks
+type HealthChecker struct {
+    checkers map[string]HealthCheckerFunc
+    mu       sync.RWMutex
 }
+
+// NewHealthChecker creates a new health checker
+func NewHealthChecker() *HealthChecker
+
+// Add adds a named health checker
+func (h *HealthChecker) Add(name string, checker HealthCheckerFunc)
+
+// Remove removes a health checker
+func (h *HealthChecker) Remove(name string)
+
+// Check runs all health checks
+func (h *HealthChecker) Check(ctx context.Context) *HealthStatus
 
 // HealthStatus represents the health status response
 type HealthStatus struct {
     Status    string                 `json:"status"`    // "healthy", "unhealthy", "degraded"
     Timestamp time.Time              `json:"timestamp"`
+    Duration  string                 `json:"duration"`
     Checks    map[string]CheckResult `json:"checks,omitempty"`
     Version   string                 `json:"version,omitempty"`
 }
 
 type CheckResult struct {
-    Status  string        `json:"status"`
-    Latency time.Duration `json:"latency_ms"`
-    Error   string        `json:"error,omitempty"`
+    Status   string `json:"status"`
+    Duration string `json:"duration"`
+    Error    string `json:"error,omitempty"`
 }
 
-// Built-in checkers
-type CompositeHealthChecker struct {
-    checkers []HealthChecker
-}
+// Health handlers
+func HealthHandler(checker *HealthChecker) echo.HandlerFunc
+func LivenessHandler() echo.HandlerFunc
+func ReadinessHandler(checker *HealthChecker) echo.HandlerFunc
 
-func NewCompositeHealthChecker(checkers ...HealthChecker) *CompositeHealthChecker
-func (c *CompositeHealthChecker) Add(checker HealthChecker)
-func (c *CompositeHealthChecker) Check(ctx context.Context) *HealthStatus
-
-// Health handler
-func HealthHandler(checker *CompositeHealthChecker) HandlerFunc
-func ReadinessHandler(checker *CompositeHealthChecker) HandlerFunc
-func LivenessHandler() HandlerFunc
-```
-
-**Built-in health checkers:**
-- `PingChecker` - Simple ping check
-- `DatabaseChecker` - Database connectivity
-- `HTTPChecker` - External HTTP service
-- `DiskSpaceChecker` - Disk space availability
-- `MemoryChecker` - Memory usage
-
----
-
-### 12. Graceful Shutdown (`graceful.go`)
-
-Graceful shutdown handling.
-
-```go
-// GracefulShutdown handles server shutdown
-type GracefulShutdown struct {
-    server   *http.Server
-    timeout  time.Duration
-    logger   Logger
-    hooks    []ShutdownHook
-}
-
-// ShutdownHook is called during shutdown
-type ShutdownHook func(ctx context.Context) error
-
-// Methods
-func NewGracefulShutdown(server *http.Server, timeout time.Duration, logger Logger) *GracefulShutdown
-func (g *GracefulShutdown) OnShutdown(hook ShutdownHook)
-func (g *GracefulShutdown) ListenForSignals(signals ...os.Signal)
-func (g *GracefulShutdown) Shutdown(ctx context.Context) error
+// Built-in health checkers
+func PingChecker() HealthCheckerFunc
+func DatabaseChecker(db interface{ PingContext(context.Context) error }) HealthCheckerFunc
+func HTTPChecker(url string, timeout time.Duration) HealthCheckerFunc
 ```
 
 ---
 
-### 13. Built-in Middlewares
+### 9. Response Helpers (`response.go`)
 
-#### Recovery Middleware (`recovery.go`)
+Convenient response utilities.
+
 ```go
-func Recovery() Middleware
-func RecoveryWithConfig(config RecoveryConfig) Middleware
+// JSON sends a JSON response (wrapper around c.JSON)
+func JSON(c echo.Context, code int, data interface{}) error
 
-type RecoveryConfig struct {
-    StackSize         int  // Default: 4KB
-    DisableStackAll   bool
-    DisablePrintStack bool
-    LogLevel          LogLevel
-    Handler           func(w http.ResponseWriter, r *http.Request, err interface{})
-}
-```
+// JSONPretty sends a pretty-printed JSON response
+func JSONPretty(c echo.Context, code int, data interface{}) error
 
-#### Timeout Middleware (`timeout.go`)
-```go
-func Timeout(timeout time.Duration) Middleware
-func TimeoutWithConfig(config TimeoutConfig) Middleware
+// Success sends a success response with data
+func Success(c echo.Context, data interface{}) error
 
-type TimeoutConfig struct {
-    Timeout        time.Duration
-    ErrorMessage   string
-    ErrorHandler   func(w http.ResponseWriter, r *http.Request)
-}
-```
+// Created sends a 201 Created response
+func Created(c echo.Context, data interface{}) error
 
-#### CORS Middleware (`cors.go`)
-```go
-func CORS() Middleware
-func CORSWithConfig(config CORSConfig) Middleware
+// NoContent sends a 204 No Content response
+func NoContent(c echo.Context) error
 
-type CORSConfig struct {
-    AllowOrigins     []string // Default: ["*"]
-    AllowMethods     []string // Default: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-    AllowHeaders     []string
-    ExposeHeaders    []string
-    AllowCredentials bool
-    MaxAge           int      // Preflight cache duration in seconds
-}
-```
+// Error sends an error response
+func Error(c echo.Context, err error) error
 
-#### Request ID Middleware (`requestid.go`)
-```go
-func RequestID() Middleware
-func RequestIDWithConfig(config RequestIDConfig) Middleware
+// ErrorWithCode sends an error response with a specific code
+func ErrorWithCode(c echo.Context, code int, message string) error
 
-type RequestIDConfig struct {
-    Header    string                    // Default: "X-Request-ID"
-    Generator func() string             // Default: UUID v4
-    SkipFunc  func(*http.Request) bool  // Skip certain requests
-}
-```
+// Paginated sends a paginated response
+func Paginated(c echo.Context, data interface{}, total int64, page, pageSize int) error
 
-#### Compression Middleware (`compress.go`)
-```go
-func Compress() Middleware
-func CompressWithConfig(config CompressConfig) Middleware
-
-type CompressConfig struct {
-    Level      int      // gzip.DefaultCompression
-    MinSize    int      // Minimum size to compress
-    Types      []string // Content types to compress
-    Skipper    func(*http.Request) bool
-}
-```
-
-#### Rate Limiting Middleware (`ratelimit.go`)
-```go
-func RateLimit(requests int, window time.Duration) Middleware
-func RateLimitWithConfig(config RateLimitConfig) Middleware
-
-type RateLimitConfig struct {
-    Requests     int
-    Window       time.Duration
-    KeyFunc      func(*http.Request) string // Default: client IP
-    ExceededHandler func(w http.ResponseWriter, r *http.Request)
-    Store        RateLimitStore // In-memory by default
+// PaginatedResponse is the standard pagination response format
+type PaginatedResponse struct {
+    Data       interface{} `json:"data"`
+    Pagination Pagination  `json:"pagination"`
 }
 
-// RateLimitStore interface for custom storage
-type RateLimitStore interface {
-    Increment(key string, window time.Duration) (int, error)
-    Reset(key string) error
+type Pagination struct {
+    Total      int64 `json:"total"`
+    Page       int   `json:"page"`
+    PageSize   int   `json:"page_size"`
+    TotalPages int   `json:"total_pages"`
 }
-```
 
-#### Logging Middleware (`logging.go`)
-```go
-func Logging(logger Logger) Middleware
-func LoggingWithConfig(config LoggingConfig) Middleware
+// Stream sends a streaming response
+func Stream(c echo.Context, contentType string, reader io.Reader) error
 
-type LoggingConfig struct {
-    Logger          Logger
-    SkipPaths       []string
-    SkipFunc        func(*http.Request) bool
-    FormatFunc      func(*http.Request, *ResponseWriter, time.Duration) string
-    LogRequestBody  bool
-    LogResponseBody bool
-}
+// File sends a file response
+func File(c echo.Context, filepath string) error
+
+// Attachment sends a file as attachment
+func Attachment(c echo.Context, filepath, filename string) error
 ```
 
 ---
 
-### 14. Request Validation (`validation.go`)
+### 10. Validator (`validator.go`)
 
-Request validation helpers.
+Request validation setup.
 
 ```go
-// Validator interface for custom validators
-type Validator interface {
-    Validate() error
+import "github.com/go-playground/validator/v10"
+
+// CustomValidator wraps go-playground/validator
+type CustomValidator struct {
+    validator *validator.Validate
 }
 
-// ValidationError represents validation failures
+// NewValidator creates a new custom validator
+func NewValidator() *CustomValidator
+
+// Validate implements echo.Validator interface
+func (cv *CustomValidator) Validate(i interface{}) error
+
+// RegisterValidation registers a custom validation function
+func (cv *CustomValidator) RegisterValidation(tag string, fn validator.Func) error
+
+// ValidationError represents a validation error
 type ValidationError struct {
     Field   string `json:"field"`
+    Tag     string `json:"tag"`
+    Value   string `json:"value,omitempty"`
     Message string `json:"message"`
-    Value   interface{} `json:"value,omitempty"`
 }
 
+// ValidationErrors is a slice of validation errors
 type ValidationErrors []ValidationError
 
 func (v ValidationErrors) Error() string
 
-// Validation helpers
-func Validate(v interface{}) error
-func ValidateStruct(s interface{}) ValidationErrors
-
-// Built-in validators
-type Rules struct {
-    Required    bool
-    Min         int
-    Max         int
-    MinLength   int
-    MaxLength   int
-    Pattern     string
-    Email       bool
-    URL         bool
-    UUID        bool
-    OneOf       []string
-    Custom      func(interface{}) error
-}
+// TranslateValidationErrors converts validator errors to our format
+func TranslateValidationErrors(err error) ValidationErrors
 ```
 
 ---
 
-### 15. Static File Serving (`static.go`)
+### 11. Auth Adapter (`auth_adapter.go`)
 
-Static file server utilities.
+Integration with the existing auth package.
 
 ```go
-// Static serves static files from a directory
-func Static(urlPath, fsPath string) HandlerFunc
+import "github.com/rompi/core-backend/pkg/auth"
 
-// StaticFS serves files from an http.FileSystem
-func StaticFS(urlPath string, fs http.FileSystem) HandlerFunc
+// AuthMiddleware adapts auth.Service middleware to Echo middleware
+func AuthMiddleware(authService auth.Service) echo.MiddlewareFunc
 
-// StaticFile serves a single file
-func StaticFile(urlPath, filePath string) HandlerFunc
+// RequireRoleMiddleware creates middleware that requires specific roles
+func RequireRoleMiddleware(authService auth.Service, roles ...string) echo.MiddlewareFunc
 
-// StaticConfig for advanced configuration
-type StaticConfig struct {
-    Root       string
-    Index      string // Default: "index.html"
-    Browse     bool   // Enable directory browsing
-    MaxAge     int    // Cache-Control max-age
-    Compress   bool   // Enable compression
-    SkipFunc   func(*http.Request) bool
-}
+// RequirePermissionMiddleware creates middleware that requires specific permissions
+func RequirePermissionMiddleware(authService auth.Service, permissions ...string) echo.MiddlewareFunc
 
-func StaticWithConfig(config StaticConfig) HandlerFunc
+// GetAuthUser returns the authenticated user from context
+func GetAuthUser(c echo.Context) *auth.User
+
+// OptionalAuthMiddleware sets user if authenticated but doesn't require it
+func OptionalAuthMiddleware(authService auth.Service) echo.MiddlewareFunc
 ```
 
 ---
 
-### 16. Metrics Interface (`metrics.go`)
+### 12. Functional Options (`options.go`)
 
-Metrics collection interface for observability.
+```go
+type Option func(*Server)
+
+// WithConfig sets the server configuration
+func WithConfig(cfg *Config) Option
+
+// WithLogger sets the logger
+func WithLogger(logger Logger) Option
+
+// WithEcho sets a pre-configured Echo instance
+func WithEcho(e *echo.Echo) Option
+
+// WithMiddleware adds middleware to the server
+func WithMiddleware(middleware ...echo.MiddlewareFunc) Option
+
+// WithErrorHandler sets a custom error handler
+func WithErrorHandler(handler echo.HTTPErrorHandler) Option
+
+// WithValidator sets a custom validator
+func WithValidator(validator echo.Validator) Option
+
+// WithHealthChecker sets the health checker
+func WithHealthChecker(checker *HealthChecker) Option
+
+// WithBinder sets a custom binder
+func WithBinder(binder echo.Binder) Option
+
+// WithRenderer sets a custom renderer (for HTML templates)
+func WithRenderer(renderer echo.Renderer) Option
+
+// WithDebug enables debug mode
+func WithDebug(debug bool) Option
+
+// WithAddr sets the server address
+func WithAddr(addr string) Option
+
+// WithTLS configures TLS
+func WithTLS(certFile, keyFile string) Option
+
+// WithGracefulShutdown enables graceful shutdown with signals
+func WithGracefulShutdown(enabled bool) Option
+
+// WithShutdownTimeout sets the shutdown timeout
+func WithShutdownTimeout(timeout time.Duration) Option
+
+// WithCORS enables CORS with the given origins
+func WithCORS(origins ...string) Option
+
+// WithRateLimit enables rate limiting
+func WithRateLimit(rate float64, burst int) Option
+
+// WithMetrics sets the metrics collector
+func WithMetrics(metrics Metrics) Option
+```
+
+---
+
+### 13. Metrics Interface (`metrics.go`)
 
 ```go
 // Metrics defines the metrics collection interface
@@ -761,87 +758,69 @@ type Metrics interface {
 // NoopMetrics is a no-operation metrics implementation
 type NoopMetrics struct{}
 
-// MetricsMiddleware creates a middleware that collects metrics
-func MetricsMiddleware(m Metrics) Middleware
-
-// Built-in in-memory metrics for development
-type InMemoryMetrics struct {
-    // ...counters and histograms
-}
-
-func NewInMemoryMetrics() *InMemoryMetrics
-func (m *InMemoryMetrics) Handler() HandlerFunc // Returns metrics as JSON
+func (NoopMetrics) IncrementRequestCount(method, path string, status int)              {}
+func (NoopMetrics) ObserveRequestDuration(method, path string, duration time.Duration) {}
+func (NoopMetrics) IncrementActiveRequests()                                           {}
+func (NoopMetrics) DecrementActiveRequests()                                           {}
 ```
 
 ---
 
-### 17. Testing Utilities (`testutil/`)
-
-Testing helpers for users of the package.
+### 14. Testing Utilities (`testutil/`)
 
 ```go
 // testutil/test_server.go
+package testutil
+
+import (
+    "github.com/rompi/core-backend/pkg/httpserver"
+    "github.com/labstack/echo/v4"
+    "net/http/httptest"
+)
+
+// TestServer provides testing utilities for httpserver
 type TestServer struct {
-    Server   *Server
-    URL      string
-    Client   *http.Client
+    Server *httpserver.Server
+    Echo   *echo.Echo
 }
 
-func NewTestServer(opts ...Option) *TestServer
-func (s *TestServer) Close()
-func (s *TestServer) Do(req *http.Request) (*http.Response, error)
-func (s *TestServer) Get(path string) (*http.Response, error)
-func (s *TestServer) Post(path string, body interface{}) (*http.Response, error)
-func (s *TestServer) Put(path string, body interface{}) (*http.Response, error)
-func (s *TestServer) Delete(path string) (*http.Response, error)
+// NewTestServer creates a new test server
+func NewTestServer(opts ...httpserver.Option) *TestServer
+
+// Request creates a new test request
+func (s *TestServer) Request(method, path string) *TestRequest
+
+// TestRequest is a test request builder
+type TestRequest struct {
+    server  *TestServer
+    method  string
+    path    string
+    body    interface{}
+    headers map[string]string
+    query   map[string]string
+}
+
+func (r *TestRequest) WithBody(body interface{}) *TestRequest
+func (r *TestRequest) WithHeader(key, value string) *TestRequest
+func (r *TestRequest) WithQuery(key, value string) *TestRequest
+func (r *TestRequest) WithAuth(token string) *TestRequest
+func (r *TestRequest) Do() *TestResponse
+
+// TestResponse wraps the response for assertions
+type TestResponse struct {
+    *httptest.ResponseRecorder
+}
+
+func (r *TestResponse) Status() int
+func (r *TestResponse) JSON(v interface{}) error
+func (r *TestResponse) String() string
 
 // testutil/assertions.go
-func AssertStatus(t *testing.T, resp *http.Response, expected int)
-func AssertJSON(t *testing.T, resp *http.Response, expected interface{})
-func AssertHeader(t *testing.T, resp *http.Response, key, expected string)
-func AssertBodyContains(t *testing.T, resp *http.Response, expected string)
-
-// testutil/mock_handler.go
-type MockHandler struct {
-    Calls   []MockCall
-    Handler HandlerFunc
-}
-
-type MockCall struct {
-    Method  string
-    Path    string
-    Headers http.Header
-    Body    []byte
-}
-
-func NewMockHandler(handler HandlerFunc) *MockHandler
-func (m *MockHandler) AssertCalled(t *testing.T, method, path string)
-```
-
----
-
-## Functional Options Pattern (`options.go`)
-
-```go
-type Option func(*Server)
-
-// Server options
-func WithConfig(cfg *Config) Option
-func WithLogger(logger Logger) Option
-func WithRouter(router *Router) Option
-func WithMiddleware(middlewares ...Middleware) Option
-func WithErrorHandler(handler ErrorHandler) Option
-func WithHealthChecker(checker *CompositeHealthChecker) Option
-func WithMetrics(metrics Metrics) Option
-func WithTLS(certFile, keyFile string) Option
-func WithAddr(addr string) Option
-func WithReadTimeout(timeout time.Duration) Option
-func WithWriteTimeout(timeout time.Duration) Option
-func WithIdleTimeout(timeout time.Duration) Option
-func WithMaxHeaderBytes(size int) Option
-func WithShutdownTimeout(timeout time.Duration) Option
-func WithGracefulShutdown(enabled bool) Option
-func WithRequestIDGenerator(gen func() string) Option
+func AssertStatus(t *testing.T, resp *TestResponse, expected int)
+func AssertJSON(t *testing.T, resp *TestResponse, expected interface{})
+func AssertHeader(t *testing.T, resp *TestResponse, key, expected string)
+func AssertBodyContains(t *testing.T, resp *TestResponse, expected string)
+func AssertNoError(t *testing.T, err error)
 ```
 
 ---
@@ -854,6 +833,7 @@ package main
 
 import (
     "net/http"
+    "github.com/labstack/echo/v4"
     "github.com/rompi/core-backend/pkg/httpserver"
 )
 
@@ -862,58 +842,59 @@ func main() {
     server := httpserver.NewServer()
 
     // Register routes
-    server.Router().GET("/", func(w http.ResponseWriter, r *http.Request) error {
-        return httpserver.JSON(w, http.StatusOK, map[string]string{
+    server.GET("/", func(c echo.Context) error {
+        return c.JSON(http.StatusOK, map[string]string{
             "message": "Hello, World!",
         })
     })
 
-    server.Router().GET("/users/:id", getUser)
-    server.Router().POST("/users", createUser)
+    server.GET("/users/:id", getUser)
+    server.POST("/users", createUser)
 
-    // Start server
+    // Start server (blocks until shutdown)
     server.ListenAndServe()
 }
 
-func getUser(w http.ResponseWriter, r *http.Request) error {
-    id := httpserver.PathParam(r, "id")
+func getUser(c echo.Context) error {
+    id := c.Param("id")
     // ... fetch user
-    return httpserver.JSON(w, http.StatusOK, user)
+    return c.JSON(http.StatusOK, user)
 }
 
-func createUser(w http.ResponseWriter, r *http.Request) error {
+func createUser(c echo.Context) error {
     var req CreateUserRequest
-    if err := httpserver.BindJSON(r, &req); err != nil {
+    if err := c.Bind(&req); err != nil {
+        return err
+    }
+    if err := c.Validate(&req); err != nil {
         return err
     }
     // ... create user
-    return httpserver.Created(w, "/users/"+user.ID, user)
+    return c.JSON(http.StatusCreated, user)
 }
 ```
 
 ### With Configuration
 ```go
+config := httpserver.DefaultConfig()
+config.Port = 3000
+config.CORSEnabled = true
+config.RateLimitEnabled = true
+config.RateLimitRate = 100
+
 server := httpserver.NewServer(
-    httpserver.WithAddr(":8080"),
-    httpserver.WithReadTimeout(30 * time.Second),
-    httpserver.WithWriteTimeout(30 * time.Second),
+    httpserver.WithConfig(config),
     httpserver.WithLogger(myLogger),
-    httpserver.WithMiddleware(
-        httpserver.Recovery(),
-        httpserver.RequestID(),
-        httpserver.Logging(myLogger),
-        httpserver.CORS(),
-        httpserver.Compress(),
-    ),
+    httpserver.WithDebug(true),
 )
 ```
 
 ### Route Groups
 ```go
-router := server.Router()
+server := httpserver.NewServer()
 
 // API v1 group
-v1 := router.Group("/api/v1", authMiddleware)
+v1 := server.Group("/api/v1")
 {
     v1.GET("/users", listUsers)
     v1.POST("/users", createUser)
@@ -922,9 +903,13 @@ v1 := router.Group("/api/v1", authMiddleware)
     v1.DELETE("/users/:id", deleteUser)
 }
 
-// Public routes
-router.GET("/health", httpserver.LivenessHandler())
-router.GET("/ready", httpserver.ReadinessHandler(healthChecker))
+// Admin routes with additional middleware
+admin := server.Group("/admin", adminMiddleware)
+{
+    admin.GET("/stats", getStats)
+}
+
+server.ListenAndServe()
 ```
 
 ### Integration with Auth Package
@@ -940,36 +925,116 @@ func main() {
 
     // Create server
     server := httpserver.NewServer(
-        httpserver.WithMiddleware(
-            httpserver.Recovery(),
-            httpserver.RequestID(),
-            httpserver.Logging(logger),
-        ),
+        httpserver.WithLogger(logger),
     )
 
-    router := server.Router()
-
     // Public routes
-    router.POST("/auth/login", loginHandler(authService))
-    router.POST("/auth/register", registerHandler(authService))
+    server.POST("/auth/login", loginHandler(authService))
+    server.POST("/auth/register", registerHandler(authService))
 
     // Protected routes with auth middleware
-    protected := router.Group("/api", httpserver.Adapt(authService.Middleware()))
+    api := server.Group("/api", httpserver.AuthMiddleware(authService))
     {
-        protected.GET("/profile", profileHandler)
-        protected.PUT("/profile", updateProfileHandler)
+        api.GET("/profile", profileHandler)
+        api.PUT("/profile", updateProfileHandler)
     }
 
-    // Admin routes
-    admin := router.Group("/admin",
-        httpserver.Adapt(authService.Middleware()),
-        httpserver.Adapt(authService.RequireRole("admin")),
+    // Admin routes with role requirement
+    admin := server.Group("/admin",
+        httpserver.AuthMiddleware(authService),
+        httpserver.RequireRoleMiddleware(authService, "admin"),
     )
     {
         admin.GET("/users", adminListUsers)
+        admin.DELETE("/users/:id", adminDeleteUser)
     }
 
     server.ListenAndServe()
+}
+
+func profileHandler(c echo.Context) error {
+    user := httpserver.GetAuthUser(c)
+    return c.JSON(http.StatusOK, user)
+}
+```
+
+### Custom Health Checks
+```go
+server := httpserver.NewServer()
+
+// Add custom health checkers
+server.AddHealthChecker("database", httpserver.DatabaseChecker(db))
+server.AddHealthChecker("redis", func(ctx context.Context) error {
+    return redisClient.Ping(ctx).Err()
+})
+server.AddHealthChecker("external-api", httpserver.HTTPChecker("https://api.example.com/health", 5*time.Second))
+
+// Health endpoints are automatically registered:
+// GET /health       - Combined health status
+// GET /health/live  - Liveness probe (always returns 200 if server is running)
+// GET /health/ready - Readiness probe (checks all health checkers)
+
+server.ListenAndServe()
+```
+
+### Custom Error Handling
+```go
+server := httpserver.NewServer(
+    httpserver.WithErrorHandler(func(err error, c echo.Context) {
+        // Custom error handling logic
+        code := http.StatusInternalServerError
+        message := "Internal Server Error"
+
+        if he, ok := err.(*httpserver.HTTPError); ok {
+            code = he.Code
+            message = he.Message
+        } else if he, ok := err.(*echo.HTTPError); ok {
+            code = he.Code
+            message = fmt.Sprintf("%v", he.Message)
+        }
+
+        // Log error
+        logger.Error("request error",
+            "error", err,
+            "code", code,
+            "request_id", httpserver.GetRequestID(c),
+        )
+
+        // Send response
+        c.JSON(code, map[string]interface{}{
+            "error":      message,
+            "request_id": httpserver.GetRequestID(c),
+        })
+    }),
+)
+```
+
+### Using Response Helpers
+```go
+func listUsers(c echo.Context) error {
+    page := c.QueryParam("page")
+    pageSize := c.QueryParam("page_size")
+
+    users, total, err := userService.List(page, pageSize)
+    if err != nil {
+        return httpserver.Error(c, err)
+    }
+
+    return httpserver.Paginated(c, users, total, page, pageSize)
+}
+
+func createUser(c echo.Context) error {
+    var req CreateUserRequest
+    if err := httpserver.BindAndValidate(c, &req); err != nil {
+        return err
+    }
+
+    user, err := userService.Create(req)
+    if err != nil {
+        return httpserver.WrapError(http.StatusConflict, "user already exists", err)
+    }
+
+    return httpserver.Created(c, user)
 }
 ```
 
@@ -979,71 +1044,81 @@ func main() {
 
 ### Phase 1: Core Foundation
 1. `errors.go` - Error types and handling
-2. `logger.go` - Logger interface
-3. `context.go` - Context utilities
-4. `config.go` - Configuration
-5. `handler.go` - Handler types
-6. `response.go` - Response helpers
-7. `request.go` - Request helpers
-8. `middleware.go` - Middleware types and chaining
-9. `router.go` - Router with path parameters
-10. `server.go` - Main server implementation
+2. `logger.go` - Logger interface and Echo adapter
+3. `config.go` - Configuration
+4. `options.go` - Functional options
+5. `server.go` - Main server wrapper
 
-### Phase 2: Essential Middleware
-11. `recovery.go` - Panic recovery
-12. `requestid.go` - Request ID
-13. `timeout.go` - Request timeout
-14. `cors.go` - CORS support
+### Phase 2: Request/Response
+6. `context.go` - Context utilities
+7. `response.go` - Response helpers
+8. `validator.go` - Custom validator
+9. `binder.go` - Custom binder extensions
 
-### Phase 3: Advanced Features
-15. `health.go` - Health checks
-16. `graceful.go` - Graceful shutdown
-17. `compress.go` - Response compression
-18. `ratelimit.go` - Rate limiting
-19. `validation.go` - Request validation
-20. `binding.go` - Request body binding
+### Phase 3: Middleware & Features
+10. `middleware.go` - Custom middleware
+11. `handler.go` - Handler utilities
+12. `health.go` - Health checks
+13. `metrics.go` - Metrics interface
 
-### Phase 4: Production Features
-21. `tls.go` - TLS configuration
-22. `metrics.go` - Metrics interface
-23. `static.go` - Static file serving
-24. `options.go` - Functional options
+### Phase 4: Integration
+14. `auth_adapter.go` - Auth package integration
 
 ### Phase 5: Testing and Documentation
-25. `testutil/` - Testing utilities
-26. `examples/` - Example implementations
-27. `README.md` - Package documentation
-28. `doc.go` - Godoc documentation
-29. All `*_test.go` files
+15. `testutil/` - Testing utilities
+16. `examples/` - Example implementations
+17. `README.md` - Package documentation
+18. `doc.go` - Godoc documentation
+19. All `*_test.go` files
+
+---
+
+## Comparison: Echo vs Custom Implementation
+
+| Feature | Custom (Previous Plan) | Echo-Based (This Plan) |
+|---------|----------------------|------------------------|
+| Router Performance | Good | Excellent (radix tree) |
+| Path Parameters | Custom impl needed | Built-in |
+| Middleware System | Custom impl needed | Built-in, extensive |
+| Request Binding | Custom impl needed | Built-in (JSON, XML, Form) |
+| Validation | Custom impl needed | Built-in (go-playground/validator) |
+| Error Handling | Custom impl needed | Built-in, centralized |
+| WebSocket | Out of scope | Supported |
+| HTTP/2 | Manual setup | Built-in |
+| Dependencies | stdlib only | Echo + validator |
+| Development Time | ~4-6 weeks | ~1-2 weeks |
+| Maintenance | High | Low (community maintained) |
+| Documentation | Custom | Extensive (echo.labstack.com) |
 
 ---
 
 ## Non-Goals (Out of Scope)
 
-1. **WebSocket support** - May be added in a future version
-2. **HTTP/2 Server Push** - Deprecated in most browsers
-3. **GraphQL support** - Should be a separate package
-4. **Template rendering** - Use standard library or third-party
-5. **Session management** - Handled by auth package
-6. **Database integration** - Keep package focused on HTTP
+1. **GraphQL support** - Should be a separate package
+2. **Template rendering** - Use Echo's built-in or third-party
+3. **Session management** - Handled by auth package
+4. **Database integration** - Keep package focused on HTTP
+5. **Custom router** - Use Echo's optimized router
 
 ---
 
 ## Success Criteria
 
-1. Zero external dependencies (stdlib only)
-2. 90%+ test coverage
-3. Comprehensive documentation with examples
-4. Seamless integration with existing auth and httpclient packages
-5. Performance on par with net/http
-6. Memory efficient with minimal allocations
-7. Thread-safe for concurrent use
+1. Seamless integration with Echo ecosystem
+2. Easy plug-and-play for upstream services
+3. 90%+ test coverage
+4. Comprehensive documentation with examples
+5. Seamless integration with existing auth and httpclient packages
+6. Sensible production-ready defaults
+7. Support for all common HTTP patterns
 8. Easy to extend with custom middleware
 
 ---
 
 ## References
 
-- Go net/http package documentation
+- [Echo Framework Documentation](https://echo.labstack.com/)
+- [Echo GitHub Repository](https://github.com/labstack/echo)
+- [go-playground/validator](https://github.com/go-playground/validator)
 - Existing patterns from pkg/auth and pkg/httpclient
 - coding-guidelines.md for style conventions
