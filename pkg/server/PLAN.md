@@ -18,7 +18,8 @@ This document outlines the comprehensive plan for creating a production-ready se
 2. **Unified Server**: Single package manages both gRPC and HTTP servers
 3. **Production-Ready**: Built-in interceptors, middleware, health checks, graceful shutdown
 4. **Plug-and-Play**: Easy to set up with sensible defaults
-5. **Consistent**: Follows existing codebase patterns (auth, httpclient packages)
+5. **Zero Internal Dependencies**: Uses interfaces for auth, logging - no coupling to internal packages
+6. **Consistent**: Follows existing codebase patterns
 
 ---
 
@@ -93,6 +94,7 @@ pkg/server/
 ├── options.go             # Functional options pattern
 ├── errors.go              # Unified error handling (gRPC status ↔ HTTP)
 ├── logger.go              # Logger interface
+├── auth.go                # Auth interfaces (Authenticator, User) - no internal deps
 ├── grpc/
 │   ├── server.go          # gRPC server wrapper
 │   ├── interceptor.go     # Interceptor chain builder
@@ -352,8 +354,8 @@ func WithHealthChecker(checker *health.Checker) Option
 func WithGracefulShutdown(enabled bool) Option
 func WithShutdownTimeout(timeout time.Duration) Option
 
-// --- Auth Integration ---
-func WithAuthService(authService auth.Service) Option
+// --- Auth Integration (uses interfaces, no internal deps) ---
+func WithAuthenticator(auth Authenticator) Option
 ```
 
 ---
@@ -431,29 +433,196 @@ func HTTPToGRPCCode(httpCode int) codes.Code
 
 ---
 
-### 5. gRPC Interceptors (`grpc/`)
+### 5. Auth Interfaces (`auth.go`)
+
+Auth interfaces that allow integration with any authentication system without coupling to internal packages.
+
+```go
+package server
+
+import (
+    "context"
+    "net/http"
+)
+
+// User represents an authenticated user
+// Implement this interface to integrate with your auth system
+type User interface {
+    // GetID returns the user's unique identifier
+    GetID() string
+
+    // GetRole returns the user's role (e.g., "admin", "user")
+    GetRole() string
+
+    // GetPermissions returns the user's permissions
+    GetPermissions() []string
+
+    // HasRole checks if user has the specified role
+    HasRole(role string) bool
+
+    // HasPermission checks if user has the specified permission
+    HasPermission(permission string) bool
+}
+
+// Authenticator validates tokens and returns user information
+// Implement this interface to integrate with your auth system (e.g., pkg/auth)
+type Authenticator interface {
+    // ValidateToken validates a token and returns the authenticated user
+    // Returns nil user and nil error if token is missing (for optional auth)
+    // Returns nil user and error if token is invalid
+    ValidateToken(ctx context.Context, token string) (User, error)
+}
+
+// RoleChecker checks if a user has required roles
+// Optional: implement for custom role checking logic
+type RoleChecker interface {
+    // CheckRoles returns nil if user has any of the required roles
+    CheckRoles(user User, roles ...string) error
+}
+
+// PermissionChecker checks if a user has required permissions
+// Optional: implement for custom permission checking logic
+type PermissionChecker interface {
+    // CheckPermissions returns nil if user has all required permissions
+    CheckPermissions(user User, permissions ...string) error
+}
+
+// --- Default Implementations ---
+
+// DefaultUser is a simple User implementation
+type DefaultUser struct {
+    ID          string
+    Role        string
+    Permissions []string
+}
+
+func (u *DefaultUser) GetID() string            { return u.ID }
+func (u *DefaultUser) GetRole() string          { return u.Role }
+func (u *DefaultUser) GetPermissions() []string { return u.Permissions }
+
+func (u *DefaultUser) HasRole(role string) bool {
+    return u.Role == role
+}
+
+func (u *DefaultUser) HasPermission(permission string) bool {
+    for _, p := range u.Permissions {
+        if p == permission {
+            return true
+        }
+    }
+    return false
+}
+
+// --- Context Helpers ---
+
+type contextKey string
+
+const userContextKey contextKey = "server-user"
+
+// UserFromContext extracts the authenticated user from context
+func UserFromContext(ctx context.Context) User
+
+// ContextWithUser adds an authenticated user to the context
+func ContextWithUser(ctx context.Context, user User) context.Context
+
+// UserFromRequest extracts the authenticated user from HTTP request context
+func UserFromRequest(r *http.Request) User
+```
+
+**Example: Integrating with pkg/auth**
+
+```go
+package main
+
+import (
+    "context"
+
+    "github.com/rompi/core-backend/pkg/auth"
+    "github.com/rompi/core-backend/pkg/server"
+)
+
+// AuthAdapter adapts pkg/auth to server.Authenticator interface
+type AuthAdapter struct {
+    authService auth.Service
+}
+
+func NewAuthAdapter(authService auth.Service) *AuthAdapter {
+    return &AuthAdapter{authService: authService}
+}
+
+func (a *AuthAdapter) ValidateToken(ctx context.Context, token string) (server.User, error) {
+    if token == "" {
+        return nil, nil // No token provided (for optional auth)
+    }
+
+    // Use pkg/auth to validate the token
+    authUser, err := a.authService.ValidateSession(ctx, token)
+    if err != nil {
+        return nil, err
+    }
+
+    // Wrap auth.User to implement server.User interface
+    return &UserWrapper{user: authUser}, nil
+}
+
+// UserWrapper wraps auth.User to implement server.User interface
+type UserWrapper struct {
+    user *auth.User
+}
+
+func (w *UserWrapper) GetID() string            { return w.user.ID }
+func (w *UserWrapper) GetRole() string          { return w.user.Role }
+func (w *UserWrapper) GetPermissions() []string { return w.user.Permissions }
+func (w *UserWrapper) HasRole(role string) bool { return w.user.Role == role }
+func (w *UserWrapper) HasPermission(p string) bool {
+    for _, perm := range w.user.Permissions {
+        if perm == p {
+            return true
+        }
+    }
+    return false
+}
+
+// Usage:
+func main() {
+    authService, _ := auth.NewService(config, repos)
+    authAdapter := NewAuthAdapter(authService)
+
+    srv, _ := server.NewServer(
+        server.WithAuthenticator(authAdapter),
+        // ...
+    )
+}
+```
+
+---
+
+### 6. gRPC Interceptors (`grpc/`)
 
 #### Auth Interceptor (`grpc/auth.go`)
 ```go
-import "github.com/rompi/core-backend/pkg/auth"
+// Note: Uses server.Authenticator interface - no internal package dependencies
 
-// AuthInterceptor creates an authentication interceptor using pkg/auth
-func AuthInterceptor(authService auth.Service) grpc.UnaryServerInterceptor
+// AuthInterceptor creates an authentication interceptor
+// Requires valid token, returns Unauthenticated error if invalid
+func AuthInterceptor(auth server.Authenticator) grpc.UnaryServerInterceptor
 
 // AuthStreamInterceptor creates a streaming auth interceptor
-func AuthStreamInterceptor(authService auth.Service) grpc.StreamServerInterceptor
-
-// RequireRoleInterceptor creates an interceptor that requires specific roles
-func RequireRoleInterceptor(authService auth.Service, roles ...string) grpc.UnaryServerInterceptor
-
-// RequirePermissionInterceptor creates an interceptor that requires specific permissions
-func RequirePermissionInterceptor(authService auth.Service, permissions ...string) grpc.UnaryServerInterceptor
+func AuthStreamInterceptor(auth server.Authenticator) grpc.StreamServerInterceptor
 
 // OptionalAuthInterceptor sets user if token present but doesn't require it
-func OptionalAuthInterceptor(authService auth.Service) grpc.UnaryServerInterceptor
+func OptionalAuthInterceptor(auth server.Authenticator) grpc.UnaryServerInterceptor
 
-// GetAuthUser extracts authenticated user from context
-func GetAuthUser(ctx context.Context) *auth.User
+// RequireRoleInterceptor creates an interceptor that requires specific roles
+// Must be used after AuthInterceptor
+func RequireRoleInterceptor(roles ...string) grpc.UnaryServerInterceptor
+
+// RequirePermissionInterceptor creates an interceptor that requires specific permissions
+// Must be used after AuthInterceptor
+func RequirePermissionInterceptor(permissions ...string) grpc.UnaryServerInterceptor
+
+// GetUser extracts authenticated user from context (returns server.User interface)
+func GetUser(ctx context.Context) server.User
 ```
 
 #### Logging Interceptor (`grpc/logging.go`)
@@ -563,22 +732,25 @@ func Chain(middlewares ...Middleware) Middleware
 
 #### Auth Middleware (`gateway/auth.go`)
 ```go
-import "github.com/rompi/core-backend/pkg/auth"
+// Note: Uses server.Authenticator interface - no internal package dependencies
 
-// AuthMiddleware creates HTTP auth middleware using pkg/auth
-func AuthMiddleware(authService auth.Service) Middleware
-
-// RequireRoleMiddleware requires specific roles
-func RequireRoleMiddleware(authService auth.Service, roles ...string) Middleware
-
-// RequirePermissionMiddleware requires specific permissions
-func RequirePermissionMiddleware(authService auth.Service, permissions ...string) Middleware
+// AuthMiddleware creates HTTP auth middleware
+// Requires valid token, returns 401 Unauthorized if invalid
+func AuthMiddleware(auth server.Authenticator) Middleware
 
 // OptionalAuthMiddleware sets user if authenticated, but doesn't require it
-func OptionalAuthMiddleware(authService auth.Service) Middleware
+func OptionalAuthMiddleware(auth server.Authenticator) Middleware
 
-// GetAuthUser extracts authenticated user from request context
-func GetAuthUser(r *http.Request) *auth.User
+// RequireRoleMiddleware requires specific roles
+// Must be used after AuthMiddleware
+func RequireRoleMiddleware(roles ...string) Middleware
+
+// RequirePermissionMiddleware requires specific permissions
+// Must be used after AuthMiddleware
+func RequirePermissionMiddleware(permissions ...string) Middleware
+
+// GetUser extracts authenticated user from request context (returns server.User interface)
+func GetUser(r *http.Request) server.User
 ```
 
 #### Rate Limit Middleware (`gateway/ratelimit.go`)
@@ -1027,21 +1199,62 @@ func (s *UserServiceImpl) ListUsers(ctx context.Context, req *userv1.ListUsersRe
 package main
 
 import (
+    "context"
     "log"
 
-    "github.com/rompi/core-backend/pkg/auth"
+    "github.com/rompi/core-backend/pkg/auth"      // Your auth package
     "github.com/rompi/core-backend/pkg/server"
     "github.com/rompi/core-backend/pkg/server/grpc"
     "github.com/rompi/core-backend/pkg/server/gateway"
     "github.com/rompi/core-backend/pkg/server/examples/gen/user/v1"
 )
 
+// --- Step 1: Create an adapter to implement server.Authenticator interface ---
+
+type AuthAdapter struct {
+    authService auth.Service
+}
+
+func (a *AuthAdapter) ValidateToken(ctx context.Context, token string) (server.User, error) {
+    if token == "" {
+        return nil, nil
+    }
+    user, err := a.authService.ValidateSession(ctx, token)
+    if err != nil {
+        return nil, err
+    }
+    return &UserWrapper{user: user}, nil
+}
+
+// UserWrapper adapts auth.User to server.User interface
+type UserWrapper struct {
+    user *auth.User
+}
+
+func (w *UserWrapper) GetID() string              { return w.user.ID }
+func (w *UserWrapper) GetRole() string            { return w.user.Role }
+func (w *UserWrapper) GetPermissions() []string   { return w.user.Permissions }
+func (w *UserWrapper) HasRole(role string) bool   { return w.user.Role == role }
+func (w *UserWrapper) HasPermission(p string) bool {
+    for _, perm := range w.user.Permissions {
+        if perm == p {
+            return true
+        }
+    }
+    return false
+}
+
+// --- Step 2: Use the adapter with the server ---
+
 func main() {
-    // Setup auth service
+    // Setup your auth service
     authService, err := auth.NewService(authConfig, repos)
     if err != nil {
         log.Fatal(err)
     }
+
+    // Create adapter that implements server.Authenticator
+    authAdapter := &AuthAdapter{authService: authService}
 
     // Create server with auth
     srv, err := server.NewServer(
@@ -1049,21 +1262,22 @@ func main() {
         server.WithHTTPAddr(":8080"),
         server.WithLogger(logger),
 
-        // gRPC interceptors
+        // gRPC interceptors (using interface-based auth)
         server.WithUnaryInterceptor(
             grpc.RecoveryInterceptor(logger),
             grpc.RequestIDInterceptor(),
             grpc.LoggingInterceptor(logger),
-            grpc.AuthInterceptor(authService),        // Auth for all methods
+            grpc.AuthInterceptor(authAdapter),         // Uses Authenticator interface
+            grpc.RequireRoleInterceptor("user"),       // Optional: require specific role
         ),
 
-        // HTTP middleware
+        // HTTP middleware (using interface-based auth)
         server.WithHTTPMiddleware(
             gateway.RecoveryMiddleware(logger),
             gateway.RequestIDMiddleware(),
             gateway.LoggingMiddleware(logger),
             gateway.CORSWithOrigins("*"),
-            gateway.AuthMiddleware(authService),      // Auth for all routes
+            gateway.AuthMiddleware(authAdapter),       // Uses Authenticator interface
         ),
     )
     if err != nil {
@@ -1071,23 +1285,24 @@ func main() {
     }
 
     // Register services
-    userService := &UserServiceImpl{authService: authService}
+    userService := &UserServiceImpl{}
     userv1.RegisterUserServiceServer(srv.GRPCServer(), userService)
     srv.RegisterGateway(userv1.RegisterUserServiceHandlerFromEndpoint)
 
     srv.ListenAndServe()
 }
 
-// In your service implementation, access the authenticated user:
+// --- Step 3: Access authenticated user in your handlers ---
+
 func (s *UserServiceImpl) GetUser(ctx context.Context, req *userv1.GetUserRequest) (*userv1.GetUserResponse, error) {
-    // Get authenticated user from context
-    authUser := grpc.GetAuthUser(ctx)
-    if authUser == nil {
+    // Get authenticated user from context (returns server.User interface)
+    user := grpc.GetUser(ctx)
+    if user == nil {
         return nil, server.ErrUnauthenticated
     }
 
-    // Check if user can access this resource
-    if authUser.Role != "admin" && authUser.ID != req.Id {
+    // Use interface methods
+    if !user.HasRole("admin") && user.GetID() != req.Id {
         return nil, server.ErrPermissionDenied
     }
 
@@ -1397,11 +1612,12 @@ curl "http://localhost:8080/api/v1/users?page=1&page_size=10" \
 1. Single source of truth (proto files) for API definitions
 2. Both gRPC and HTTP clients can access the same services
 3. 90%+ test coverage
-4. Seamless integration with existing auth package
-5. Per-endpoint rate limiting for both gRPC and HTTP
-6. Production-ready defaults (recovery, logging, health checks)
-7. Easy to extend with custom interceptors/middleware
-8. Generated OpenAPI documentation
+4. **Zero internal package dependencies** - uses interfaces for auth, logging
+5. Easy integration with any auth system via Authenticator interface
+6. Per-endpoint rate limiting for both gRPC and HTTP
+7. Production-ready defaults (recovery, logging, health checks)
+8. Easy to extend with custom interceptors/middleware
+9. Generated OpenAPI documentation
 
 ---
 
@@ -1411,5 +1627,4 @@ curl "http://localhost:8080/api/v1/users?page=1&page_size=10" \
 - [gRPC Go Documentation](https://grpc.io/docs/languages/go/)
 - [Protocol Buffers](https://protobuf.dev/)
 - [go-grpc-middleware](https://github.com/grpc-ecosystem/go-grpc-middleware)
-- Existing patterns from pkg/auth and pkg/httpclient
 - coding-guidelines.md for style conventions
