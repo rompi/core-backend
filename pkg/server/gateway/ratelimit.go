@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
-
-	"github.com/rompi/core-backend/pkg/server"
 )
 
 // RateLimitConfig defines HTTP rate limiting configuration.
