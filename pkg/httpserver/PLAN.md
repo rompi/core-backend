@@ -51,6 +51,7 @@ pkg/httpserver/
 ├── errors.go           # Structured error types and error handlers
 ├── logger.go           # Logger adapter for Echo (bridges to our Logger interface)
 ├── health.go           # Health check handlers
+├── ratelimit.go        # Per-endpoint rate limiting middleware
 ├── binder.go           # Custom binder extensions
 ├── validator.go        # Custom validator setup
 ├── response.go         # Response helper utilities
@@ -59,6 +60,7 @@ pkg/httpserver/
 ├── doc.go              # Package documentation
 ├── server_test.go      # Server tests
 ├── middleware_test.go  # Middleware tests
+├── ratelimit_test.go   # Rate limiting tests
 ├── *_test.go           # Other test files
 ├── testutil/           # Testing utilities
 │   ├── test_server.go  # Test server helper
@@ -67,6 +69,7 @@ pkg/httpserver/
 │   ├── basic/          # Minimal setup example
 │   ├── rest-api/       # Full REST API example
 │   ├── with-auth/      # Integration with auth package
+│   ├── rate-limiting/  # Per-endpoint rate limiting example
 │   └── custom-middleware/ # Custom middleware example
 └── README.md           # Package documentation
 ```
@@ -222,11 +225,12 @@ type Config struct {
     CORSAllowCredentials bool     `env:"HTTP_CORS_ALLOW_CREDENTIALS" envDefault:"false"`
     CORSMaxAge           int      `env:"HTTP_CORS_MAX_AGE" envDefault:"86400"`
 
-    // Rate Limiting
+    // Global Rate Limiting (applies to all routes as default)
+    // For per-endpoint rate limiting, use RateLimit() middleware on specific routes/groups
     RateLimitEnabled  bool          `env:"HTTP_RATE_LIMIT_ENABLED" envDefault:"false"`
-    RateLimitRate     float64       `env:"HTTP_RATE_LIMIT_RATE" envDefault:"10"`
-    RateLimitBurst    int           `env:"HTTP_RATE_LIMIT_BURST" envDefault:"30"`
-    RateLimitExpiry   time.Duration `env:"HTTP_RATE_LIMIT_EXPIRY" envDefault:"3m"`
+    RateLimitRate     float64       `env:"HTTP_RATE_LIMIT_RATE" envDefault:"20"`      // requests per second
+    RateLimitBurst    int           `env:"HTTP_RATE_LIMIT_BURST" envDefault:"40"`     // burst size
+    RateLimitExpiry   time.Duration `env:"HTTP_RATE_LIMIT_EXPIRY" envDefault:"3m"`    // memory store expiry
 
     // Compression
     GzipEnabled bool `env:"HTTP_GZIP_ENABLED" envDefault:"true"`
@@ -566,7 +570,161 @@ func HTTPChecker(url string, timeout time.Duration) HealthCheckerFunc
 
 ---
 
-### 9. Response Helpers (`response.go`)
+### 9. Rate Limiting (`ratelimit.go`)
+
+Flexible per-endpoint rate limiting with preset configurations and custom options.
+
+```go
+import (
+    "time"
+    "github.com/labstack/echo/v4"
+    "golang.org/x/time/rate"
+)
+
+// RateLimitConfig defines configuration for rate limiting middleware
+type RateLimitConfig struct {
+    // Rate is the number of requests allowed per second
+    Rate float64
+
+    // Burst is the maximum number of requests allowed in a burst
+    Burst int
+
+    // Expiry is the duration after which the rate limiter state expires for a key
+    // Only applicable for memory store
+    Expiry time.Duration
+
+    // KeyFunc extracts the key for rate limiting (default: client IP)
+    // Use this to implement rate limiting by user ID, API key, etc.
+    KeyFunc func(c echo.Context) string
+
+    // ExceededHandler is called when rate limit is exceeded
+    // Default: returns 429 Too Many Requests with JSON error
+    ExceededHandler func(c echo.Context) error
+
+    // SkipFunc determines whether to skip rate limiting for a request
+    // Return true to skip rate limiting
+    SkipFunc func(c echo.Context) bool
+
+    // Store is the rate limiter store (default: in-memory)
+    // Implement RateLimitStore interface for Redis/distributed stores
+    Store RateLimitStore
+
+    // Message is the error message when rate limit is exceeded
+    Message string
+
+    // Headers controls whether to add rate limit headers to response
+    // X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset
+    Headers bool
+}
+
+// RateLimitStore interface for custom storage backends
+type RateLimitStore interface {
+    // Allow checks if the request is allowed and updates the counter
+    // Returns (allowed bool, remaining int, resetTime time.Time, err error)
+    Allow(key string, rate float64, burst int) (bool, int, time.Time, error)
+}
+
+// MemoryStore is the default in-memory rate limit store
+type MemoryStore struct {
+    limiters sync.Map
+    expiry   time.Duration
+}
+
+func NewMemoryStore(expiry time.Duration) *MemoryStore
+
+// --- Core Rate Limit Middleware ---
+
+// RateLimit creates a rate limiting middleware with the given configuration
+func RateLimit(config RateLimitConfig) echo.MiddlewareFunc
+
+// RateLimitWithRate creates a simple rate limiter with requests/second and burst
+func RateLimitWithRate(rps float64, burst int) echo.MiddlewareFunc
+
+// --- Preset Rate Limiters ---
+// These presets cover common use cases with sensible defaults
+
+// RateLimitStrict creates a strict rate limiter for sensitive endpoints
+// - 5 requests/second, burst of 10
+// - Use for: login, password reset, registration, OTP verification
+func RateLimitStrict() echo.MiddlewareFunc
+
+// RateLimitAuth creates a rate limiter for authentication endpoints
+// - 10 requests/second, burst of 20
+// - Use for: token refresh, logout, session management
+func RateLimitAuth() echo.MiddlewareFunc
+
+// RateLimitNormal creates a standard rate limiter for regular API endpoints
+// - 30 requests/second, burst of 60
+// - Use for: CRUD operations, general API access
+func RateLimitNormal() echo.MiddlewareFunc
+
+// RateLimitRelaxed creates a relaxed rate limiter for high-traffic endpoints
+// - 100 requests/second, burst of 200
+// - Use for: read-heavy endpoints, public data, search
+func RateLimitRelaxed() echo.MiddlewareFunc
+
+// RateLimitBulk creates a rate limiter for bulk operations
+// - 2 requests/second, burst of 5
+// - Use for: bulk imports, exports, batch operations
+func RateLimitBulk() echo.MiddlewareFunc
+
+// --- Key Functions for Different Rate Limiting Strategies ---
+
+// KeyByIP returns client IP as the rate limit key (default)
+func KeyByIP() func(echo.Context) string
+
+// KeyByUserID returns authenticated user ID as the rate limit key
+// Falls back to IP if user is not authenticated
+func KeyByUserID() func(echo.Context) string
+
+// KeyByAPIKey returns API key from header as the rate limit key
+// Falls back to IP if no API key is present
+func KeyByAPIKey(header string) func(echo.Context) string
+
+// KeyByPath returns the request path as the rate limit key
+// Useful for per-endpoint global rate limiting
+func KeyByPath() func(echo.Context) string
+
+// KeyByIPAndPath returns combined IP + path as the rate limit key
+// Allows different limits per endpoint per user
+func KeyByIPAndPath() func(echo.Context) string
+
+// KeyByCustom creates a custom key function
+func KeyByCustom(fn func(echo.Context) string) func(echo.Context) string
+
+// --- Response Headers ---
+
+// RateLimitHeaders are added to responses when Headers is enabled
+// X-RateLimit-Limit: Maximum requests allowed
+// X-RateLimit-Remaining: Remaining requests in current window
+// X-RateLimit-Reset: Unix timestamp when the rate limit resets
+// Retry-After: Seconds until the client should retry (only on 429)
+```
+
+**Default Rate Limit Error Response:**
+```json
+{
+    "code": 429,
+    "message": "rate limit exceeded",
+    "details": {
+        "retry_after": 2,
+        "limit": 10,
+        "remaining": 0
+    },
+    "request_id": "abc-123-xyz"
+}
+```
+
+**Response Headers (when enabled):**
+```
+X-RateLimit-Limit: 30
+X-RateLimit-Remaining: 25
+X-RateLimit-Reset: 1699459200
+```
+
+---
+
+### 10. Response Helpers (`response.go`)
 
 Convenient response utilities.
 
