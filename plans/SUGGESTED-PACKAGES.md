@@ -21,176 +21,140 @@ This document outlines new packages that would complement the existing `core-bac
 
 ## Infrastructure Packages
 
-### 1. pkg/cache - Caching Layer
+### Core Infrastructure
 
-**Purpose:** Unified caching interface supporting Redis and in-memory stores.
+| # | Package | Purpose | Plan |
+|---|---------|---------|------|
+| 1 | `pkg/cache` | Redis & in-memory caching | [PLAN-cache.md](./PLAN-cache.md) |
+| 2 | `pkg/queue` | Message queue (Kafka, RabbitMQ, NATS) | [PLAN-queue.md](./PLAN-queue.md) |
+| 3 | `pkg/storage` | File storage (S3, GCS, Azure, local) | [PLAN-storage.md](./PLAN-storage.md) |
+| 4 | `pkg/scheduler` | Background jobs with cron support | [PLAN-scheduler.md](./PLAN-scheduler.md) |
+| 5 | `pkg/pubsub` | Pub/Sub for event broadcasting | [PLAN-pubsub.md](./PLAN-pubsub.md) |
 
-**Why:** Most production applications need caching for performance. A unified interface allows swapping backends without code changes.
+### Resilience & Reliability
 
-**Plan:** [PLAN-cache.md](./PLAN-cache.md)
+| # | Package | Purpose | Plan |
+|---|---------|---------|------|
+| 6 | `pkg/ratelimit` | Rate limiting (token bucket, sliding window) | [PLAN-ratelimit.md](./PLAN-ratelimit.md) |
+| 7 | `pkg/circuitbreaker` | Circuit breaker for fault tolerance | [PLAN-circuitbreaker.md](./PLAN-circuitbreaker.md) |
+| 8 | `pkg/retry` | Retry with exponential backoff | [PLAN-retry.md](./PLAN-retry.md) |
+| 9 | `pkg/lock` | Distributed locking (Redis, PostgreSQL) | [PLAN-lock.md](./PLAN-lock.md) |
+| 10 | `pkg/health` | Health check aggregation | [PLAN-health.md](./PLAN-health.md) |
 
----
+### Service Infrastructure
 
-### 2. pkg/queue - Message Queue Client
-
-**Purpose:** Asynchronous message processing with support for Kafka, RabbitMQ, and NATS.
-
-**Why:** Event-driven architectures and microservices communication require reliable message queuing.
-
-**Plan:** [PLAN-queue.md](./PLAN-queue.md)
-
----
-
-### 3. pkg/storage - File Storage Abstraction
-
-**Purpose:** Unified file storage interface supporting S3, GCS, Azure Blob, and local filesystem.
-
-**Why:** Applications often need to store and retrieve files. A unified interface enables cloud-agnostic implementations.
-
-**Plan:** [PLAN-storage.md](./PLAN-storage.md)
-
----
-
-### 4. pkg/scheduler - Background Job Processing
-
-**Purpose:** Background job scheduling and processing with cron support.
-
-**Why:** Applications need to run periodic tasks (cleanup, reports, sync) and process async jobs.
-
-**Plan:** [PLAN-scheduler.md](./PLAN-scheduler.md)
+| # | Package | Purpose | Plan |
+|---|---------|---------|------|
+| 11 | `pkg/discovery` | Service discovery (Consul, K8s, etcd) | [PLAN-discovery.md](./PLAN-discovery.md) |
+| 12 | `pkg/worker` | Worker pool for concurrent tasks | [PLAN-worker.md](./PLAN-worker.md) |
+| 13 | `pkg/idgen` | ID generation (UUID, ULID, Snowflake) | [PLAN-idgen.md](./PLAN-idgen.md) |
+| 14 | `pkg/feature` | Feature flags and toggles | [PLAN-feature.md](./PLAN-feature.md) |
 
 ---
 
 ## Communication Packages
 
-### 5. pkg/email - Email Service
-
-**Purpose:** Email sending with template support, multiple providers (SMTP, SendGrid, SES).
-
-**Why:** Nearly every application needs to send transactional emails (welcome, password reset, notifications).
-
-**Plan:** [PLAN-email.md](./PLAN-email.md)
-
----
-
-### 6. pkg/websocket - Real-Time Communication
-
-**Purpose:** WebSocket server with rooms/channels, pub/sub, and horizontal scaling via Redis.
-
-**Why:** Real-time features (chat, notifications, live updates) require persistent connections.
-
-**Plan:** [PLAN-websocket.md](./PLAN-websocket.md)
-
----
-
-### 7. pkg/notification - Push Notifications
-
-**Purpose:** Push notifications via FCM, APNs, and Web Push.
-
-**Why:** Mobile and web apps need push notifications for user engagement.
-
-**Plan:** [PLAN-notification.md](./PLAN-notification.md)
+| # | Package | Purpose | Plan |
+|---|---------|---------|------|
+| 15 | `pkg/email` | Email with templates (SMTP, SendGrid, SES) | [PLAN-email.md](./PLAN-email.md) |
+| 16 | `pkg/websocket` | Real-time WebSocket server | [PLAN-websocket.md](./PLAN-websocket.md) |
+| 17 | `pkg/notification` | Push notifications (FCM, APNs) | [PLAN-notification.md](./PLAN-notification.md) |
 
 ---
 
 ## Observability & Operations
 
-### 8. pkg/observability - Tracing & Metrics
-
-**Purpose:** Distributed tracing and metrics collection using OpenTelemetry.
-
-**Why:** Production systems require observability for debugging, performance monitoring, and alerting.
-
-**Plan:** [PLAN-observability.md](./PLAN-observability.md)
+| # | Package | Purpose | Plan |
+|---|---------|---------|------|
+| 18 | `pkg/observability` | Tracing & metrics (OpenTelemetry) | [PLAN-observability.md](./PLAN-observability.md) |
+| 19 | `pkg/audit` | Audit logging for compliance | [PLAN-audit.md](./PLAN-audit.md) |
 
 ---
 
 ## Configuration & Security
 
-### 9. pkg/config - Configuration Management
-
-**Purpose:** Unified configuration from multiple sources (env, files, Consul, etcd).
-
-**Why:** Applications need flexible configuration that works across environments.
-
-**Plan:** [PLAN-config.md](./PLAN-config.md)
-
----
-
-### 10. pkg/secrets - Secrets Management
-
-**Purpose:** Secure secrets retrieval from Vault, AWS Secrets Manager, GCP, Azure.
-
-**Why:** Production apps need secure secrets management beyond environment variables.
-
-**Plan:** [PLAN-secrets.md](./PLAN-secrets.md)
+| # | Package | Purpose | Plan |
+|---|---------|---------|------|
+| 20 | `pkg/config` | Multi-source configuration | [PLAN-config.md](./PLAN-config.md) |
+| 21 | `pkg/secrets` | Secrets management (Vault, AWS, GCP) | [PLAN-secrets.md](./PLAN-secrets.md) |
 
 ---
 
 ## Data & Validation
 
-### 11. pkg/migrate - Database Migrations
-
-**Purpose:** Schema versioning with up/down migrations for PostgreSQL, MySQL, SQLite.
-
-**Why:** Every database-backed application needs schema migration management.
-
-**Plan:** [PLAN-migrate.md](./PLAN-migrate.md)
+| # | Package | Purpose | Plan |
+|---|---------|---------|------|
+| 22 | `pkg/migrate` | Database migrations | [PLAN-migrate.md](./PLAN-migrate.md) |
+| 23 | `pkg/validator` | Input validation with i18n | [PLAN-validator.md](./PLAN-validator.md) |
+| 24 | `pkg/search` | Search client (Elasticsearch, Meilisearch) | [PLAN-search.md](./PLAN-search.md) |
 
 ---
 
-### 12. pkg/validator - Input Validation
+## Application Architecture
 
-**Purpose:** Struct tag-based validation with custom rules and i18n error messages.
-
-**Why:** Input validation is critical for security and data integrity.
-
-**Plan:** [PLAN-validator.md](./PLAN-validator.md)
-
----
-
-### 13. pkg/search - Search Engine Client
-
-**Purpose:** Unified search client for Elasticsearch, Meilisearch, Typesense.
-
-**Why:** Applications with search functionality need a consistent search interface.
-
-**Plan:** [PLAN-search.md](./PLAN-search.md)
+| # | Package | Purpose | Plan |
+|---|---------|---------|------|
+| 25 | `pkg/tenant` | Multi-tenancy support | [PLAN-tenant.md](./PLAN-tenant.md) |
 
 ---
 
 ## Document Generation
 
-### 14. pkg/pdf - PDF Generation
-
-**Purpose:** Create PDFs from HTML, templates, or programmatically.
-
-**Why:** Applications need to generate reports, invoices, and documents.
-
-**Plan:** [PLAN-pdf.md](./PLAN-pdf.md)
+| # | Package | Purpose | Plan |
+|---|---------|---------|------|
+| 26 | `pkg/pdf` | PDF generation | [PLAN-pdf.md](./PLAN-pdf.md) |
 
 ---
 
 ## Implementation Priority
 
-Recommended implementation order based on common usage patterns:
-
+### Tier 1: Foundation (Implement First)
 | Priority | Package | Reason |
 |----------|---------|--------|
-| 1 | `config` | Foundation for all other packages |
-| 2 | `validator` | Essential for API input validation |
-| 3 | `migrate` | Required for database schema management |
-| 4 | `cache` | Most applications need caching |
-| 5 | `observability` | Critical for production debugging |
-| 6 | `secrets` | Secure credential management |
-| 7 | `email` | Common requirement for auth flows |
-| 8 | `queue` | Essential for async processing |
-| 9 | `scheduler` | Background job processing |
-| 10 | `storage` | File handling needs |
-| 11 | `websocket` | Real-time features |
-| 12 | `search` | Full-text search functionality |
-| 13 | `notification` | Push notification support |
-| 14 | `pdf` | Document generation |
+| 1 | `config` | Foundation for all packages |
+| 2 | `validator` | Essential for API security |
+| 3 | `migrate` | Database schema management |
+| 4 | `health` | Kubernetes deployment ready |
+| 5 | `idgen` | Unique ID generation |
+
+### Tier 2: Resilience & Performance
+| Priority | Package | Reason |
+|----------|---------|--------|
+| 6 | `retry` | Resilient operations |
+| 7 | `circuitbreaker` | Fault tolerance |
+| 8 | `ratelimit` | API protection |
+| 9 | `cache` | Performance optimization |
+| 10 | `lock` | Distributed coordination |
+
+### Tier 3: Observability & Operations
+| Priority | Package | Reason |
+|----------|---------|--------|
+| 11 | `observability` | Production debugging |
+| 12 | `audit` | Compliance & security |
+| 13 | `secrets` | Secure credentials |
+
+### Tier 4: Communication & Events
+| Priority | Package | Reason |
+|----------|---------|--------|
+| 14 | `email` | Common requirement |
+| 15 | `queue` | Async processing |
+| 16 | `pubsub` | Event-driven architecture |
+| 17 | `scheduler` | Background jobs |
+
+### Tier 5: Advanced Features
+| Priority | Package | Reason |
+|----------|---------|--------|
+| 18 | `worker` | Controlled concurrency |
+| 19 | `feature` | Feature flags |
+| 20 | `discovery` | Microservices |
+| 21 | `storage` | File handling |
+| 22 | `websocket` | Real-time features |
+| 23 | `search` | Full-text search |
+| 24 | `notification` | Push notifications |
+| 25 | `tenant` | Multi-tenancy |
+| 26 | `pdf` | Document generation |
+
+---
 
 ## Package Independence
 
@@ -201,12 +165,21 @@ Following the existing pattern, each new package will be **completely independen
 - Interfaces allow custom implementations
 - All dependencies are optional (pluggable)
 
+---
+
 ## Integration Examples
 
 While packages are independent, they work well together:
 
 ```go
-// Example: Load configuration with secrets
+// Example: Resilient HTTP client
+client := httpclient.New(
+    httpclient.WithRetry(retry.NewExponentialBackoff(...)),
+    httpclient.WithCircuitBreaker(circuitbreaker.New("api", ...)),
+    httpclient.WithRateLimit(ratelimit.New(...)),
+)
+
+// Example: Configuration with secrets
 cfg := config.New(
     config.WithProvider(config.NewEnvProvider()),
     config.WithSecrets(secrets.NewVaultClient()),
@@ -216,42 +189,70 @@ cfg := config.New(
 func createUser(w http.ResponseWriter, r *http.Request) {
     var req CreateUserRequest
     json.NewDecoder(r.Body).Decode(&req)
-
     if err := validator.Validate(r.Context(), &req); err != nil {
         // Return validation errors
     }
 }
 
-// Example: Rate limiting with Redis cache
-limiter := ratelimit.New(cache.NewRedisStore(redisClient))
-server := server.New(server.WithRateLimiter(limiter))
+// Example: Distributed operations with locking
+mutex := lock.NewMutex("resource:123")
+mutex.Lock(ctx)
+defer mutex.Unlock(ctx)
 
-// Example: Async email sending via queue
+// Example: Multi-tenant data access
+tenant := tenant.FromContext(ctx)
+db := strategy.Scope(ctx, tenant.ID)
+users, _ := db.Query(ctx, "SELECT * FROM users")
+
+// Example: Async email via queue
 queue.Publish("emails", email.NewWelcomeEmail(user))
 
-// Example: Scheduled cache cleanup
-scheduler.Every(1).Hour().Do(func() {
-    cache.DeleteExpired()
-})
-
-// Example: Traced database queries
-ctx := observability.StartSpan(ctx, "db.query")
-rows, err := postgres.Query(ctx, query)
-observability.EndSpan(ctx)
+// Example: Scheduled background jobs
+scheduler.Every(1).Hour().Do(cache.DeleteExpired)
 
 // Example: Real-time notifications
-ws.BroadcastToRoom(ctx, userID, "notification", notification)
+ws.BroadcastToRoom(ctx, userID, "notification", data)
+
+// Example: Traced database queries
+ctx, span := observability.StartSpan(ctx, "db.query")
+rows, _ := postgres.Query(ctx, query)
+span.End()
 ```
+
+---
 
 ## Summary
 
-| Category | Packages |
-|----------|----------|
-| **Infrastructure** | cache, queue, storage, scheduler |
-| **Communication** | email, websocket, notification |
-| **Observability** | observability |
-| **Configuration** | config, secrets |
-| **Data** | migrate, validator, search |
-| **Documents** | pdf |
+| Category | Count | Packages |
+|----------|-------|----------|
+| **Core Infrastructure** | 5 | cache, queue, storage, scheduler, pubsub |
+| **Resilience** | 5 | ratelimit, circuitbreaker, retry, lock, health |
+| **Service Infrastructure** | 4 | discovery, worker, idgen, feature |
+| **Communication** | 3 | email, websocket, notification |
+| **Observability** | 2 | observability, audit |
+| **Configuration** | 2 | config, secrets |
+| **Data** | 3 | migrate, validator, search |
+| **Architecture** | 1 | tenant |
+| **Documents** | 1 | pdf |
 
-**Total: 14 new packages** to complement the existing 4 packages.
+**Total: 26 new packages** to complement the existing 4 packages.
+
+---
+
+## Quick Reference
+
+### By Use Case
+
+| Use Case | Packages |
+|----------|----------|
+| **API Development** | validator, ratelimit, auth |
+| **Database** | postgres, migrate, lock |
+| **Caching** | cache |
+| **Background Processing** | queue, scheduler, worker |
+| **Microservices** | discovery, health, circuitbreaker, pubsub |
+| **Configuration** | config, secrets, feature |
+| **Observability** | observability, audit, health |
+| **Communication** | email, websocket, notification |
+| **File Handling** | storage, pdf |
+| **Multi-tenancy** | tenant |
+| **Security** | auth, secrets, ratelimit, audit |
