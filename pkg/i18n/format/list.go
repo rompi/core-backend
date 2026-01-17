@@ -18,12 +18,12 @@ const (
 
 // ListFormat holds locale-specific list formatting rules.
 type ListFormat struct {
-	AndConnector      string // " and " or ", and "
-	OrConnector       string // " or " or ", or "
-	PairAndConnector  string // " and " for two items
-	PairOrConnector   string // " or " for two items
-	Separator         string // ", "
-	OxfordComma       bool   // Use Oxford comma before final connector
+	AndConnector     string // " and " or ", and "
+	OrConnector      string // " or " or ", or "
+	PairAndConnector string // " and " for two items
+	PairOrConnector  string // " or " for two items
+	Separator        string // ", "
+	OxfordComma      bool   // Use Oxford comma before final connector
 }
 
 // localeListFormats contains list formatting rules for various locales.
@@ -254,8 +254,12 @@ func formatListWithConnector(items []string, separator, connector, pairConnector
 				if oxfordComma {
 					result.WriteString(strings.TrimSuffix(separator, " "))
 					result.WriteString(" ")
+					result.WriteString(connector)
+				} else {
+					// Without Oxford comma, just add a space before connector
+					result.WriteString(" ")
+					result.WriteString(connector)
 				}
-				result.WriteString(connector)
 			} else {
 				result.WriteString(separator)
 			}

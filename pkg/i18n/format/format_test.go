@@ -119,7 +119,7 @@ func TestFormatCurrency(t *testing.T) {
 			locale:   "en-US",
 			amount:   1234.56,
 			currency: "USD",
-			cfg:      FormatConfig{CurrencyDisplay: CurrencyCode},
+			cfg:      FormatConfig{CurrencyDisplay: CurrencyCode, UseGrouping: true},
 			want:     "USD1,234.56",
 		},
 	}

@@ -38,6 +38,9 @@ const (
 
 	// CatalogTypeEmbed uses embedded filesystem for translations.
 	CatalogTypeEmbed CatalogType = "embed"
+
+	// CatalogTypeCustom indicates a custom catalog will be provided via WithCatalog option.
+	CatalogTypeCustom CatalogType = "custom"
 )
 
 // Config holds the configuration for the i18n instance.
@@ -140,8 +143,8 @@ func (c *Config) Validate() error {
 	}
 
 	switch c.CatalogType {
-	case CatalogTypeJSON, CatalogTypeYAML, CatalogTypePO, CatalogTypeDatabase, CatalogTypeEmbed:
-		// Valid catalog types
+	case CatalogTypeJSON, CatalogTypeYAML, CatalogTypePO, CatalogTypeDatabase, CatalogTypeEmbed, CatalogTypeCustom, "":
+		// Valid catalog types (empty is allowed when catalog is provided via WithCatalog)
 	default:
 		return fmt.Errorf("%w: invalid catalog_type: %s", ErrInvalidConfig, c.CatalogType)
 	}
