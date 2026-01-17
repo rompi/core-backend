@@ -531,3 +531,314 @@ flags:
 1. README
 2. Examples
 3. Best practices
+
+### Phase 8: Performance Metrics & Monitoring
+1. Evaluation latency metrics
+2. Cache hit/miss tracking
+3. Error rate monitoring
+4. Provider health checks
+5. Dashboard integration
+
+## Performance Metrics
+
+### Metrics Interface
+
+```go
+// Metrics defines the interface for collecting feature flag metrics
+type Metrics interface {
+    // RecordEvaluation records a flag evaluation
+    RecordEvaluation(key string, duration time.Duration, reason EvaluationReason)
+
+    // RecordError records an evaluation error
+    RecordError(key string, err error)
+
+    // RecordCacheHit records a cache hit
+    RecordCacheHit(key string)
+
+    // RecordCacheMiss records a cache miss
+    RecordCacheMiss(key string)
+
+    // RecordProviderLatency records provider response time
+    RecordProviderLatency(provider string, operation string, duration time.Duration)
+
+    // RecordProviderError records provider errors
+    RecordProviderError(provider string, operation string, err error)
+}
+
+// MetricsConfig configures metrics collection
+type MetricsConfig struct {
+    // Enabled enables metrics collection
+    Enabled bool `env:"FEATURE_METRICS_ENABLED" default:"true"`
+
+    // Namespace is the metrics namespace prefix
+    Namespace string `env:"FEATURE_METRICS_NAMESPACE" default:"feature_flags"`
+
+    // HistogramBuckets for latency histograms (in seconds)
+    HistogramBuckets []float64 `default:"0.001,0.005,0.01,0.025,0.05,0.1,0.25,0.5,1"`
+
+    // EnablePerFlagMetrics enables per-flag dimension (can be high cardinality)
+    EnablePerFlagMetrics bool `env:"FEATURE_METRICS_PER_FLAG" default:"false"`
+}
+```
+
+### Prometheus Metrics Implementation
+
+```go
+// PrometheusMetrics implements Metrics using Prometheus
+type PrometheusMetrics struct {
+    evaluationDuration  *prometheus.HistogramVec
+    evaluationTotal     *prometheus.CounterVec
+    evaluationErrors    *prometheus.CounterVec
+    cacheHits           *prometheus.CounterVec
+    cacheMisses         *prometheus.CounterVec
+    providerLatency     *prometheus.HistogramVec
+    providerErrors      *prometheus.CounterVec
+    flagsTotal          prometheus.Gauge
+    activeFlags         prometheus.Gauge
+}
+
+// NewPrometheusMetrics creates a new Prometheus metrics collector
+func NewPrometheusMetrics(cfg MetricsConfig) *PrometheusMetrics
+
+// Metric names:
+// - feature_flags_evaluation_duration_seconds (histogram)
+// - feature_flags_evaluation_total (counter)
+// - feature_flags_evaluation_errors_total (counter)
+// - feature_flags_cache_hits_total (counter)
+// - feature_flags_cache_misses_total (counter)
+// - feature_flags_provider_latency_seconds (histogram)
+// - feature_flags_provider_errors_total (counter)
+// - feature_flags_total (gauge)
+// - feature_flags_active_total (gauge)
+```
+
+### Key Metrics to Track
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `evaluation_duration_seconds` | Histogram | `flag_key`, `reason` | Time to evaluate a flag |
+| `evaluation_total` | Counter | `flag_key`, `reason`, `value` | Total evaluations |
+| `evaluation_errors_total` | Counter | `flag_key`, `error_type` | Evaluation errors |
+| `cache_hits_total` | Counter | `flag_key` | Cache hits |
+| `cache_misses_total` | Counter | `flag_key` | Cache misses |
+| `provider_latency_seconds` | Histogram | `provider`, `operation` | Provider response time |
+| `provider_errors_total` | Counter | `provider`, `operation`, `error_type` | Provider errors |
+| `flags_total` | Gauge | - | Total number of flags |
+| `flags_active_total` | Gauge | - | Number of enabled flags |
+
+### Usage with Metrics
+
+```go
+package main
+
+import (
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/user/core-backend/pkg/feature"
+)
+
+func main() {
+    // Create Prometheus metrics
+    metrics := feature.NewPrometheusMetrics(feature.MetricsConfig{
+        Enabled:              true,
+        Namespace:            "myapp_feature_flags",
+        EnablePerFlagMetrics: true,
+    })
+
+    // Register with Prometheus
+    prometheus.MustRegister(metrics)
+
+    // Create client with metrics
+    client, err := feature.New(cfg,
+        feature.WithMetrics(metrics),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer client.Close()
+
+    // Evaluations automatically record metrics
+    client.Bool(ctx, "new-feature", false)
+}
+```
+
+### OpenTelemetry Integration
+
+```go
+// OTelMetrics implements Metrics using OpenTelemetry
+type OTelMetrics struct {
+    meter           metric.Meter
+    evalDuration    metric.Float64Histogram
+    evalCounter     metric.Int64Counter
+    errorCounter    metric.Int64Counter
+    cacheHitCounter metric.Int64Counter
+}
+
+// NewOTelMetrics creates an OpenTelemetry metrics collector
+func NewOTelMetrics(meter metric.Meter, cfg MetricsConfig) (*OTelMetrics, error)
+```
+
+### Health Check Endpoint
+
+```go
+// HealthCheck returns the health status of the feature flag system
+type HealthCheck struct {
+    Status           string            `json:"status"`  // "healthy", "degraded", "unhealthy"
+    Provider         ProviderHealth    `json:"provider"`
+    Cache            CacheHealth       `json:"cache"`
+    LastRefresh      time.Time         `json:"last_refresh"`
+    FlagsLoaded      int               `json:"flags_loaded"`
+    EvaluationStats  EvaluationStats   `json:"evaluation_stats"`
+}
+
+type ProviderHealth struct {
+    Connected    bool          `json:"connected"`
+    Latency      time.Duration `json:"latency_ms"`
+    LastError    string        `json:"last_error,omitempty"`
+    LastErrorAt  *time.Time    `json:"last_error_at,omitempty"`
+}
+
+type CacheHealth struct {
+    Enabled   bool    `json:"enabled"`
+    HitRate   float64 `json:"hit_rate"`
+    Size      int     `json:"size"`
+    MaxSize   int     `json:"max_size"`
+}
+
+type EvaluationStats struct {
+    TotalEvaluations int64   `json:"total_evaluations"`
+    ErrorRate        float64 `json:"error_rate"`
+    AvgLatencyMs     float64 `json:"avg_latency_ms"`
+    P99LatencyMs     float64 `json:"p99_latency_ms"`
+}
+
+// HTTP handler for health checks
+func HealthHandler(client Client) http.HandlerFunc
+```
+
+### Dashboard Recommendations
+
+#### Grafana Dashboard Panels
+
+1. **Evaluation Performance**
+   - Evaluation latency (p50, p95, p99)
+   - Evaluations per second by flag
+   - Error rate trend
+
+2. **Cache Efficiency**
+   - Cache hit ratio over time
+   - Cache size vs capacity
+   - Miss rate by flag
+
+3. **Provider Health**
+   - Provider latency histogram
+   - Provider error rate
+   - Connection status
+
+4. **Flag Activity**
+   - Active vs inactive flags
+   - Most evaluated flags (top 10)
+   - Evaluation breakdown by reason
+
+#### Sample Prometheus Queries
+
+```promql
+# Evaluation latency P99
+histogram_quantile(0.99,
+  sum(rate(feature_flags_evaluation_duration_seconds_bucket[5m])) by (le)
+)
+
+# Error rate
+sum(rate(feature_flags_evaluation_errors_total[5m]))
+/ sum(rate(feature_flags_evaluation_total[5m])) * 100
+
+# Cache hit ratio
+sum(rate(feature_flags_cache_hits_total[5m]))
+/ (sum(rate(feature_flags_cache_hits_total[5m])) + sum(rate(feature_flags_cache_misses_total[5m]))) * 100
+
+# Provider latency P95
+histogram_quantile(0.95,
+  sum(rate(feature_flags_provider_latency_seconds_bucket[5m])) by (le, provider)
+)
+
+# Top 10 most evaluated flags
+topk(10, sum(rate(feature_flags_evaluation_total[1h])) by (flag_key))
+```
+
+### Alerting Rules
+
+```yaml
+# Prometheus alerting rules
+groups:
+  - name: feature_flags
+    rules:
+      - alert: FeatureFlagHighErrorRate
+        expr: |
+          sum(rate(feature_flags_evaluation_errors_total[5m]))
+          / sum(rate(feature_flags_evaluation_total[5m])) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Feature flag error rate above 1%"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+
+      - alert: FeatureFlagHighLatency
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(feature_flags_evaluation_duration_seconds_bucket[5m])) by (le)
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Feature flag P99 latency above 100ms"
+          description: "P99 latency is {{ $value | humanizeDuration }}"
+
+      - alert: FeatureFlagProviderDown
+        expr: feature_flags_provider_errors_total > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Feature flag provider experiencing errors"
+
+      - alert: FeatureFlagLowCacheHitRate
+        expr: |
+          sum(rate(feature_flags_cache_hits_total[5m]))
+          / (sum(rate(feature_flags_cache_hits_total[5m])) + sum(rate(feature_flags_cache_misses_total[5m]))) < 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Feature flag cache hit rate below 80%"
+```
+
+### Event Tracking for Analytics
+
+```go
+// AnalyticsEvent for tracking flag evaluations
+type AnalyticsEvent struct {
+    Timestamp    time.Time              `json:"timestamp"`
+    FlagKey      string                 `json:"flag_key"`
+    UserKey      string                 `json:"user_key"`
+    Value        interface{}            `json:"value"`
+    VariationIdx int                    `json:"variation_idx"`
+    Reason       EvaluationReason       `json:"reason"`
+    RuleID       string                 `json:"rule_id,omitempty"`
+    InExperiment bool                   `json:"in_experiment"`
+    Context      map[string]interface{} `json:"context,omitempty"`
+}
+
+// AnalyticsExporter exports evaluation events
+type AnalyticsExporter interface {
+    Export(ctx context.Context, events []AnalyticsEvent) error
+    Flush(ctx context.Context) error
+    Close() error
+}
+
+// Built-in exporters:
+// - StdoutExporter (for debugging)
+// - FileExporter (JSON lines)
+// - HTTPExporter (webhook)
+// - KafkaExporter (for streaming analytics)
+```
