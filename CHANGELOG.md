@@ -1,6 +1,19 @@
 ## [Unreleased]
 
 ### Added
+- **Config Package (`pkg/config`)**: Unified configuration management with multi-source support
+  - Multiple configuration sources: environment variables, YAML files, JSON files
+  - Priority-based merging (later providers override earlier ones)
+  - Type-safe struct binding with struct tags (`config`, `default`, `env`, `required`, `sensitive`)
+  - Hot reloading support for file-based configurations
+  - Sensitive value masking in outputs
+  - Sub-configuration access for nested sections
+  - Comprehensive getter methods for all Go types (string, int, bool, duration, time, slices, maps)
+  - Memory provider for testing
+  - 80%+ test coverage across all modules
+  - Minimal dependencies (only gopkg.in/yaml.v3 for YAML support)
+  - Complete documentation with usage examples
+  - Package location: `github.com/rompi/core-backend/pkg/config`
 - **HTTP Client Package (`pkg/httpclient`)**: Production-grade HTTP client library with enterprise features
   - Fluent API for building HTTP requests (GET, POST, PUT, PATCH, DELETE)
   - Automatic retry with exponential backoff for transient failures (5xx errors, network issues)
