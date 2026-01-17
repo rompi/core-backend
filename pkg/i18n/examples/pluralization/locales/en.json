@@ -1,0 +1,10 @@
+{
+  "items": {
+    "one": "{{.Count}} item",
+    "other": "{{.Count}} items"
+  },
+  "messages": {
+    "one": "You have {{.Count}} new message",
+    "other": "You have {{.Count}} new messages"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "greeting": "Hello, {{.Arg0}}!",
+  "welcome": {
+    "title": "Welcome",
+    "message": "Welcome to our application"
+  },
+  "order": {
+    "confirmation": "Order #{{.OrderID}} confirmed. Thank you, {{.Name}}!"
+  },
+  "errors": {
+    "not_found": "Resource not found",
+    "unauthorized": "You are not authorized"
+  }
+}
