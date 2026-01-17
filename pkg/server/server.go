@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"github.com/rompi/core-backend/pkg/server/health"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -28,9 +29,9 @@ type Server struct {
 	httpAddr string
 
 	// gRPC
-	grpcServer        *grpc.Server
-	grpcServerOptions []grpc.ServerOption
-	unaryInterceptors []grpc.UnaryServerInterceptor
+	grpcServer         *grpc.Server
+	grpcServerOptions  []grpc.ServerOption
+	unaryInterceptors  []grpc.UnaryServerInterceptor
 	streamInterceptors []grpc.StreamServerInterceptor
 
 	// HTTP/Gateway
@@ -39,6 +40,9 @@ type Server struct {
 	gatewayMux     *runtime.ServeMux
 	gatewayOptions []runtime.ServeMuxOption
 	httpMiddleware []Middleware
+
+	// Health
+	healthChecker *health.Checker
 
 	// Auth
 	authenticator Authenticator
@@ -91,6 +95,11 @@ func NewServer(opts ...Option) (*Server, error) {
 
 	// Initialize HTTP server
 	s.initHTTPServer()
+
+	// Register health endpoints if enabled
+	if s.config.HealthEnabled {
+		s.registerHealthEndpoints()
+	}
 
 	return s, nil
 }
@@ -162,6 +171,35 @@ func (s *Server) initHTTPServer() {
 		s.httpServer.TLSConfig = &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		}
+	}
+}
+
+// registerHealthEndpoints registers health check handlers at configured paths.
+func (s *Server) registerHealthEndpoints() {
+	// Initialize health checker if not already set
+	if s.healthChecker == nil {
+		s.healthChecker = health.NewChecker()
+	}
+
+	s.logger.Debug("registering health endpoints",
+		"health", s.config.HealthHTTPPath,
+		"liveness", s.config.LivenessHTTPPath,
+		"readiness", s.config.ReadinessHTTPPath,
+	)
+
+	// Register health endpoint
+	if s.config.HealthHTTPPath != "" {
+		s.httpMux.HandleFunc(s.config.HealthHTTPPath, health.HealthHandler(s.healthChecker))
+	}
+
+	// Register liveness endpoint
+	if s.config.LivenessHTTPPath != "" {
+		s.httpMux.HandleFunc(s.config.LivenessHTTPPath, health.LivenessHandler())
+	}
+
+	// Register readiness endpoint
+	if s.config.ReadinessHTTPPath != "" {
+		s.httpMux.HandleFunc(s.config.ReadinessHTTPPath, health.ReadinessHandler(s.healthChecker))
 	}
 }
 
