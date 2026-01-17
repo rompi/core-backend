@@ -1,0 +1,14 @@
+{
+  "greeting": "¡Hola, {{.Arg0}}!",
+  "welcome": {
+    "title": "Bienvenido",
+    "message": "Bienvenido a nuestra aplicación"
+  },
+  "order": {
+    "confirmation": "Pedido #{{.OrderID}} confirmado. ¡Gracias, {{.Name}}!"
+  },
+  "errors": {
+    "not_found": "Recurso no encontrado",
+    "unauthorized": "No estás autorizado"
+  }
+}

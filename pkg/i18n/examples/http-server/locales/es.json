@@ -1,0 +1,11 @@
+{
+  "greeting": "¡Hola, {{.Name}}!",
+  "welcome": {
+    "title": "Bienvenido",
+    "message": "Bienvenido a nuestra API internacionalizada"
+  },
+  "items": {
+    "one": "{{.Count}} artículo",
+    "other": "{{.Count}} artículos"
+  }
+}
