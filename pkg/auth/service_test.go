@@ -151,3 +151,68 @@ func TestService_LoginFailure(t *testing.T) {
 		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
 	}
 }
+
+func TestService_RapidLoginProducesUniqueSessions(t *testing.T) {
+	cfg := newTestConfig()
+	cfg.RateLimitMaxRequests = 100
+	hash, err := auth.HashPassword("Str0ng!Pass", cfg.BcryptCost)
+	if err != nil {
+		t.Fatalf("HashPassword() error = %v", err)
+	}
+
+	user := &auth.User{ID: "user-1", Email: "user@example.com", PasswordHash: hash}
+
+	var tokens []string
+	users := &testutil.MockUserRepository{
+		GetByEmailFunc: func(ctx context.Context, email string) (*auth.User, error) {
+			return user, nil
+		},
+		GetByIDFunc: func(ctx context.Context, id string) (*auth.User, error) {
+			return user, nil
+		},
+		ResetFailedAttemptsFunc: func(ctx context.Context, userID string) error { return nil },
+		UnlockAccountFunc:       func(ctx context.Context, userID string) error { return nil },
+		UpdateFunc: func(ctx context.Context, u *auth.User) error {
+			user = u
+			return nil
+		},
+	}
+	sessions := &testutil.MockSessionRepository{
+		CreateFunc: func(ctx context.Context, session *auth.Session) error {
+			for _, existing := range tokens {
+				if existing == session.Token {
+					return errors.New("duplicate key value violates unique constraint 'sessions_pkey'")
+				}
+			}
+			tokens = append(tokens, session.Token)
+			return nil
+		},
+	}
+
+	svc, err := auth.NewService(cfg, auth.Repositories{Users: users, Sessions: sessions})
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Change password then immediately login multiple times
+	err = svc.ChangePassword(ctx, "user-1", "Str0ng!Pass", "N3w!Pass99")
+	if err != nil {
+		t.Fatalf("ChangePassword() error = %v", err)
+	}
+
+	for i := 0; i < 5; i++ {
+		resp, err := svc.Login(ctx, auth.LoginRequest{Email: "user@example.com", Password: "N3w!Pass99"})
+		if err != nil {
+			t.Fatalf("Login() attempt %d error = %v", i+1, err)
+		}
+		if resp.Token == "" {
+			t.Fatalf("Login() attempt %d returned empty token", i+1)
+		}
+	}
+
+	if len(tokens) != 5 {
+		t.Fatalf("expected 5 unique sessions, got %d", len(tokens))
+	}
+}
