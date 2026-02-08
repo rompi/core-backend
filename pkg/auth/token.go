@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 // Claims encapsulates JWT payload data emitted by the auth package.
@@ -37,6 +38,7 @@ func (m *TokenManager) Generate(user *User) (string, time.Time, error) {
 	expiration := now.Add(m.expiration)
 	claims := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(),
 			Issuer:    m.issuer,
 			Subject:   user.ID,
 			IssuedAt:  jwt.NewNumericDate(now),
